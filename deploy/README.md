@@ -58,6 +58,14 @@ the token (same secret) to greet the visitor with their status.
 Native fips traffic (`.fips`, other fd00::/8 peers) must be **unaffected**
 throughout — the gate only touches traffic to `EXIT_FIPS_ADDR` on service ports.
 
+## Phase 2: dynamic authorization (exit-agent)
+
+Instead of the static `allowlist.txt`, run the exit-agent (`--profile agent` in
+compose, or the systemd unit in `systemd/`). It owns the `authorized` set from
+the backend and reports per-service usage read from the `acct` counters. Run
+one or the other, not both. See `../agent/README.md` for M2 verification against
+the bundled `cmd/fake-backend`.
+
 ## Known limitation / validation caveat
 
 The rendered nftables ruleset is syntax-checked with `nft -c` at load time on

@@ -1,0 +1,27 @@
+# Run the exit-agent directly on the host (alternative to the compose service).
+# It drives the host's nftables, so it needs CAP_NET_ADMIN and the nft binary.
+#
+#   install -Dm600 agent.env /etc/fips-exit/agent.env   # fill in the vars
+#   systemctl enable --now fips-exit-agent
+[Unit]
+Description=fips-exit node agent (authz sync + usage accounting)
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/fips-exit/agent.env
+ExecStart=/usr/local/bin/fips-exit-agent
+Restart=on-failure
+RestartSec=5
+# Least privilege: only what nft needs.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+StateDirectory=fips-exit-agent
+Environment=FIPS_AGENT_STATE_DIR=/var/lib/fips-exit-agent
+
+[Install]
+WantedBy=multi-user.target

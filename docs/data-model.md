@@ -109,8 +109,9 @@ usage_samples            -- per-address, per-service deltas, partitioned by mont
   service_id    fk -> services
   fips_addr     inet
   account_id    fk null                   -- resolved at ingest; null if unknown
-  rx_bytes, tx_bytes bigint               -- raw bytes; weighted consumption =
-                                          -- (rx+tx) * services.rate_ppm / 1e6
+  bytes         bigint                    -- metered total (both directions);
+                                          -- weighted consumption =
+                                          -- bytes * services.rate_ppm / 1e6
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -136,7 +137,7 @@ sessions
 
 - Crediting is a single transaction keyed on `btcpay_invoice_id`
   (insert-or-ignore purchase settle + entitlement creation).
-- `volume_used` accumulates **rate-weighted** bytes (`(rx+tx) *
+- `volume_used` accumulates **rate-weighted** bytes (`bytes *
   services.rate_ppm / 1e6`); updates and exhaustion checks happen in one
   statement at usage ingest; crossing the limit emits `del` to
   `authz_revisions` and the inline `revoke` in the usage ack.

@@ -58,8 +58,8 @@ $( [ -n "$elements" ] && printf '        elements = { %s }\n' "$elements" )
     # Per-source byte accounting on service traffic. The exit-agent reads this
     # in Phase 2; policy accept means it only counts, never blocks.
     set acct {
-        type ipv6_addr
-        size 65535
+        type ipv6_addr . inet_service
+        size 131072
         flags dynamic
         counter
     }
@@ -74,15 +74,18 @@ $( [ -n "$elements" ] && printf '        elements = { %s }\n' "$elements" )
         ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ports } redirect to :$CAPTIVE_PORT
     }
 
-    # Accounting (counts only; never drops). Both directions of authorized
-    # service traffic on the fips interface.
+    # Accounting (counts only; never drops). Keyed on (client address, service
+    # port) so usage is per-service — both directions land on the same element:
+    #   inbound  client->service: (saddr, dport=service port)
+    #   outbound service->client: (daddr, sport=service port)
+    # so the element's byte counter is the client's total for that service.
     chain acct_in {
         type filter hook prerouting priority -150; policy accept;
-        iifname "$FIPS_IF" tcp dport { $ports } ip6 saddr @authorized update @acct { ip6 saddr }
+        iifname "$FIPS_IF" ip6 saddr @authorized tcp dport { $ports } update @acct { ip6 saddr . tcp dport }
     }
     chain acct_out {
         type filter hook postrouting priority -150; policy accept;
-        oifname "$FIPS_IF" tcp sport { $ports } ip6 daddr @authorized update @acct { ip6 daddr }
+        oifname "$FIPS_IF" ip6 daddr @authorized tcp sport { $ports } update @acct { ip6 daddr . tcp sport }
     }
 }
 EOF

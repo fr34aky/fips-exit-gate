@@ -41,12 +41,15 @@ Batched byte-counter deltas, default every 30 s.
   "report_id": "01J9...",          // ULID, idempotency key
   "counter_epoch": "boot-7f3a",    // changes when counters reset (reboot/flush)
   "window_end": "2026-08-08T12:00:30Z",
-  "samples": [ { "service": "clearnet", "addr": "fd10:...", "rx": 123456, "tx": 654321 } ]
+  "samples": [ { "service": "clearnet", "addr": "fd10:...", "bytes": 778777 } ]
 }
 ```
 
-Samples are keyed by (service, addr); the backend weights them with the
-service's `rate_ppm` when decrementing the shared balance.
+Samples are keyed by (service, addr); `bytes` is the metered total for that
+client on that service in the window (both directions — the nftables `acct`
+element sums them). The backend weights it with the service's `rate_ppm` when
+decrementing the shared balance. Direction (rx/tx) split is a possible later
+refinement and is not needed for billing.
 
 Response: `{ "ack": "01J9...", "revoke": [ "fd10:..." ] }` — `revoke` lists
 addresses to remove from the set *immediately* (quota just exhausted),

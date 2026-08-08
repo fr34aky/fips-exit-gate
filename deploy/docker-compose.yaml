@@ -36,3 +36,27 @@ services:
       CAPTIVE_LISTEN: "[::]:${CAPTIVE_PORT:-1088}"
       CAPTIVE_PORTAL_URL: ${CAPTIVE_PORTAL_URL:?set CAPTIVE_PORTAL_URL}
       CAPTIVE_TOKEN_SECRET: ${CAPTIVE_TOKEN_SECRET:?set CAPTIVE_TOKEN_SECRET}
+
+  # Phase 2: the agent OWNS the nftables authorized set (replaces the static
+  # allowlist). Enable with `--profile agent`; do not also seed allowlist.txt.
+  agent:
+    build:
+      context: ..
+      dockerfile: agent/Dockerfile
+    image: fips-exit/agent:dev
+    profiles: ["agent"]
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - agent-state:/var/lib/fips-exit-agent
+    environment:
+      FIPS_AGENT_BACKEND_URL: ${FIPS_AGENT_BACKEND_URL:?set FIPS_AGENT_BACKEND_URL}
+      FIPS_AGENT_ENROLL_TOKEN: ${FIPS_AGENT_ENROLL_TOKEN:-}
+      FIPS_AGENT_TABLE: "inet fips_exit"
+      FIPS_AGENT_NODE_NAME: ${FIPS_AGENT_NODE_NAME:-exit-01}
+      FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE: ${FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE:-0}
+
+volumes:
+  agent-state:
