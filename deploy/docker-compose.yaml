@@ -24,11 +24,16 @@ services:
       EXTERNAL_IF: ${EXTERNAL_IF:?set EXTERNAL_IF}
       CLEARNET_PORT: ${CLEARNET_PORT:-1080}
       WORKERS: ${WORKERS:-4}
+    volumes:
+      # Bind the config so edits don't require an image rebuild.
+      - ../exit/sockd.conf:/srv/sockd.conf:ro
     cap_add:
       - NET_ADMIN   # Dante binds a specific interface
 
   captive:
-    build: ../captive
+    build:
+      context: ..
+      dockerfile: captive/Dockerfile
     image: fips-exit/captive:dev
     network_mode: host
     restart: unless-stopped
@@ -52,7 +57,7 @@ services:
     volumes:
       - agent-state:/var/lib/fips-exit-agent
     environment:
-      FIPS_AGENT_BACKEND_URL: ${FIPS_AGENT_BACKEND_URL:?set FIPS_AGENT_BACKEND_URL}
+      FIPS_AGENT_BACKEND_URL: ${FIPS_AGENT_BACKEND_URL:-}
       FIPS_AGENT_ENROLL_TOKEN: ${FIPS_AGENT_ENROLL_TOKEN:-}
       FIPS_AGENT_TABLE: "inet fips_exit"
       FIPS_AGENT_NODE_NAME: ${FIPS_AGENT_NODE_NAME:-exit-01}

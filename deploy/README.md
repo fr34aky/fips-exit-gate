@@ -66,9 +66,19 @@ the backend and reports per-service usage read from the `acct` counters. Run
 one or the other, not both. See `../agent/README.md` for M2 verification against
 the bundled `cmd/fake-backend`.
 
-## Known limitation / validation caveat
+## Validation status
 
-The rendered nftables ruleset is syntax-checked with `nft -c` at load time on
-the host. It could not be kernel-validated in the development sandbox (no
-CAP_NET_ADMIN), so the **first** `up.sh up` on a real host is also the first
-true validation — watch for `nft` errors there.
+M1 was validated end-to-end on two real fips nodes (2026-08-08): ruleset loads
+on a live 6.8 kernel; unauthorized clients get the captive `302` (HTTP) / clean
+failure (HTTPS); authorized clients egress with server-side DNS and the exit's
+public IP; fips (`fd00::/8`) destinations are refused through the proxy even
+for authorized clients (SOCKS error 2); and per-`(client, service)` `acct`
+counters increment on real traffic.
+
+`up.sh` still runs `nft -c -f` before loading, so a malformed ruleset fails
+safely.
+
+> Gotcha learned during bring-up: the gate only fires on traffic ingressing via
+> `fips0`. Testing from the exit host itself reaches the exit's own fips address
+> over loopback (`iifname != fips0`), bypassing the gate — always test from a
+> separate fips peer.
