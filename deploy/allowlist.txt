@@ -1,0 +1,9 @@
+# Phase 1 static authorized set: one fips address per line.
+# In Phase 2 the exit-agent owns this set from the backend; for the MVP you add
+# a client's derived address here and reload (deploy/up.sh reload).
+#
+# Derive an address from an npub with:
+#   go run ./cmd/fips-derive <npub>     (see cmd/, Phase 1)
+#
+# Example (NIP-19 spec key):
+# fd10:93b2:8586:6046:e42d:c089:3228:ccff

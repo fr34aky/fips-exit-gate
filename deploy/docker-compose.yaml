@@ -1,0 +1,38 @@
+# fips-exit node — Phase 1 MVP bring-up.
+#
+# nftables and the fips TUN interface are host-level, and both Dante and the
+# captive daemon must see the real fips source addresses, so every service uses
+# host networking. Load the nftables ruleset on the host FIRST (see up.sh),
+# then start this stack.
+services:
+  unbound:
+    image: docker.io/klutchell/unbound:latest
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./unbound.conf:/etc/unbound/unbound.conf:ro
+
+  exit-clearnet:
+    build: ../exit
+    image: fips-exit/clearnet:dev
+    network_mode: host
+    restart: unless-stopped
+    # dns is ignored under host networking; the host resolv.conf must point at
+    # unbound (127.0.0.1) — see up.sh.
+    environment:
+      FIPS_IF: ${FIPS_IF:?set FIPS_IF}
+      EXTERNAL_IF: ${EXTERNAL_IF:?set EXTERNAL_IF}
+      CLEARNET_PORT: ${CLEARNET_PORT:-1080}
+      WORKERS: ${WORKERS:-4}
+    cap_add:
+      - NET_ADMIN   # Dante binds a specific interface
+
+  captive:
+    build: ../captive
+    image: fips-exit/captive:dev
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      CAPTIVE_LISTEN: "[::]:${CAPTIVE_PORT:-1088}"
+      CAPTIVE_PORTAL_URL: ${CAPTIVE_PORTAL_URL:?set CAPTIVE_PORTAL_URL}
+      CAPTIVE_TOKEN_SECRET: ${CAPTIVE_TOKEN_SECRET:?set CAPTIVE_TOKEN_SECRET}
