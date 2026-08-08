@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"log"
 	"net/http"
@@ -46,9 +47,19 @@ func main() {
 		usageIntervalS: getenvInt("USAGE_INTERVAL_S", 30),
 		graceMinutes:   getenvInt("GRACE_MINUTES", 240),
 	}
+	p, err := newPortal(st,
+		secretEnv("SESSION_SECRET"),
+		secretEnv("CHALLENGE_SECRET"),
+		[]byte(os.Getenv("CAPTIVE_TOKEN_SECRET")),
+		os.Getenv("PORTAL_TRUST_FIPS_SOURCE") == "1",
+		os.Getenv("PORTAL_SECURE_COOKIES") != "0",
+	)
+	if err != nil {
+		log.Fatalf("backend: portal: %v", err)
+	}
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           routes(h, st, adminToken),
+		Handler:           routes(h, p, st, adminToken),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -64,7 +75,7 @@ func main() {
 	}
 }
 
-func routes(h *handlers, st *store.Store, adminToken string) http.Handler {
+func routes(h *handlers, p *portal, st *store.Store, adminToken string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Agent API: enroll is unauthenticated (uses the enroll token in-body);
@@ -81,7 +92,22 @@ func routes(h *handlers, st *store.Store, adminToken string) http.Handler {
 	mux.Handle("POST /admin/credit", requireAdmin(adminToken, h.adminCredit))
 	mux.Handle("GET /admin/authz", requireAdmin(adminToken, h.adminAuthz))
 
+	// User portal (login, dashboard, whitelist, captive landing).
+	p.routes(mux)
+
 	return mux
+}
+
+// secretEnv returns the named secret, or a random ephemeral one (logged) if
+// unset — fine for dev; set it in production so sessions survive restarts.
+func secretEnv(name string) []byte {
+	if v := os.Getenv(name); v != "" {
+		return []byte(v)
+	}
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	log.Printf("backend: %s unset, using an ephemeral random secret", name)
+	return b
 }
 
 // requireNode authenticates the node bearer token against the {id} path value.

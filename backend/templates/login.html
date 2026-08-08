@@ -1,0 +1,54 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · fips-exit</title>{{template "styles" .}}</head><body><main>
+<h1>fips-exit portal</h1>
+<p class="muted">Sign in with your nostr identity to manage your data packages and whitelist.</p>
+
+{{if .FipsHint}}<div class="card"><div class="row">
+  <div>You appear to be connecting over fips as<br><span class="mono">{{.FipsHint}}</span></div>
+  <form method="post" action="/auth/fips"><button>Continue as this identity</button></form>
+</div></div>{{end}}
+
+<div class="card">
+  <h2 style="margin-top:0">Nostr extension (NIP-07)</h2>
+  <p class="muted">Uses a browser signer such as nos2x or Alby.</p>
+  <button id="nip07">Sign in with extension</button>
+  <p id="err" class="err"></p>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Paste a signed event</h2>
+  <p class="muted">Any signer (incl. Amber): sign an event whose <span class="mono">challenge</span> tag is
+  <span class="mono" id="chal">…</span> and paste the event JSON here.</p>
+  <form method="post" action="/auth/verify" id="manual">
+    <textarea name="event" placeholder='{"kind":27235,"created_at":...,"tags":[["challenge","..."]],"content":"","pubkey":"...","id":"...","sig":"..."}'></textarea>
+    <p><input type="submit" value="Sign in"></p>
+  </form>
+</div>
+
+<script>
+async function getChallenge() {
+  const r = await fetch('/auth/challenge'); const j = await r.json();
+  document.getElementById('chal').textContent = j.challenge;
+  return j.challenge;
+}
+let challengePromise = getChallenge();
+document.getElementById('nip07').addEventListener('click', async () => {
+  const err = document.getElementById('err'); err.textContent = '';
+  try {
+    if (!window.nostr) throw new Error('No NIP-07 extension found');
+    const challenge = await challengePromise;
+    const ev = await window.nostr.signEvent({
+      kind: 27235, created_at: Math.floor(Date.now()/1000),
+      tags: [['challenge', challenge]], content: ''
+    });
+    const r = await fetch('/auth/verify', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event: ev})
+    });
+    if (r.redirected) { location.href = r.url; return; }
+    const j = await r.json();
+    if (j.redirect) location.href = j.redirect; else err.textContent = j.error || 'Sign-in failed';
+  } catch (e) { err.textContent = e.message; }
+});
+</script>
+</main></body></html>

@@ -4,7 +4,8 @@ The fips-exit control plane: the agent-facing API plus admin endpoints, backed
 by Postgres. It is the production replacement for `cmd/fake-backend`.
 
 Stack (per the project's settled choices): stdlib `net/http` (Go 1.22 routing),
-`pgx` for Postgres, plain SQL. Nostr login + the user portal are the next slice.
+`pgx` for Postgres, `btcec/schnorr` for nostr signature verification, plain SQL,
+server-rendered `html/template`.
 
 ## What it does now
 
@@ -21,6 +22,26 @@ Stack (per the project's settled choices): stdlib `net/http` (Go 1.22 routing),
 - **Admin API** (static bearer token): issue enroll tokens, create accounts,
   manage whitelist entries, and credit entitlements. Crediting is the Phase-4
   payment hook stand-in — until BTCPay lands, an admin grants packages here.
+
+## User portal
+
+Server-rendered pages (`backend/templates`) with two login paths, both ending
+in a stateless HMAC-signed session cookie keyed to the npub:
+
+- **Nostr signature** — `GET /auth/challenge` issues a stateless challenge; the
+  client signs a nostr event carrying it (NIP-07 browser extension via JS, or
+  any signer incl. Amber by pasting the signed event); `POST /auth/verify`
+  checks the Schnorr signature (`backend/nostr`), the challenge HMAC, and
+  freshness.
+- **Transparent fips-source** (`POST /auth/fips`, off by default) — when
+  `PORTAL_TRUST_FIPS_SOURCE=1` and the request arrives from an fd00::/8 source,
+  the npub-derived source address authenticates the identity with no signature.
+  A `?npub=` claim is accepted only if it derives to the trusted source address
+  (`fipsaddr.CheckDerivation`). Enable only on a fips-bound listener with no
+  proxy masking the source.
+
+Pages: `/login`, `/dashboard` (packages, usage, whitelist management),
+`/captive` (landing for the exit's redirect; verifies the captive token).
 
 ## Run (dev)
 

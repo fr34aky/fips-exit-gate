@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Access · fips-exit</title>{{template "styles" .}}</head><body><main>
+<h1>fips-exit</h1>
+<div class="card">
+  <h2 style="margin-top:0">{{.Title}}</h2>
+  <p>{{.Message}}</p>
+  {{if .Addr}}<p class="muted mono">Source: {{.Addr}}</p>{{end}}
+  <p class="row">
+    <a href="/login"><button>Sign in</button></a>
+    {{if .Npub}}<a href="/login"><button class="ghost">Buy a package</button></a>{{end}}
+  </p>
+</div>
+<p class="muted">Paid internet exit for the fips mesh. Packages are payable in Bitcoin, Lightning, and Monero.</p>
+</main></body></html>

@@ -1,0 +1,22 @@
+{{define "styles"}}<style>
+  :root { color-scheme: light dark; --fg:#e8e8ea; --bg:#16171b; --muted:#9aa0a6; --card:#212228; --accent:#7c9cff; --ok:#4caf50; --bad:#e06c75; --line:#2c2e36; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1 { font-size:1.4rem; } h2 { font-size:1.05rem; margin-top:2rem; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.15rem; margin:1rem 0; }
+  .mono { font-family: ui-monospace, monospace; word-break: break-all; font-size:.9em; }
+  table { width:100%; border-collapse: collapse; }
+  th,td { text-align:left; padding:.5rem .4rem; border-bottom:1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight:600; font-size:.82rem; text-transform:uppercase; letter-spacing:.03em; }
+  button, input[type=submit] { font:inherit; background:var(--accent); color:#0b1020; border:0; border-radius:8px; padding:.5rem .9rem; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  input[type=text], textarea { font:inherit; width:100%; background:#1b1c22; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:.55rem .65rem; }
+  textarea { font-family: ui-monospace, monospace; min-height:6rem; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .pill { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; border:1px solid var(--line); }
+  .pill.on { color:#7ee787; border-color:#2ea04326; } .pill.off { color:var(--bad); }
+  .err { color: var(--bad); }
+</style>{{end}}

@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashboard · fips-exit</title>{{template "styles" .}}</head><body><main>
+<div class="row" style="justify-content:space-between">
+  <h1 style="margin:0">Your account</h1>
+  <form method="post" action="/auth/logout"><button class="ghost">Sign out</button></form>
+</div>
+<p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
+
+<h2>Packages</h2>
+{{if .S.Entitlements}}
+<table><thead><tr><th>Type</th><th>Remaining</th><th>Expires</th><th>Status</th></tr></thead><tbody>
+{{range .S.Entitlements}}<tr>
+  <td>{{.Kind}}</td>
+  <td>{{if eq .Kind "volume"}}{{bytes .Remaining}} <span class="muted">/ {{bytes .VolumeBytes}}</span>{{else}}—{{end}}</td>
+  <td>{{.ExpiresAt.Format "2006-01-02"}}</td>
+  <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">inactive</span>{{end}}</td>
+</tr>{{end}}
+</tbody></table>
+{{else}}<div class="card">No packages yet. <a href="/captive">Buy data →</a></div>{{end}}
+<p class="muted">Total used: {{bytes .S.UsageBytes}}</p>
+
+<h2>Whitelisted identities</h2>
+<p class="muted">npubs allowed to consume this account's packages.</p>
+<table><thead><tr><th>Identity</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+{{range .S.Whitelist}}<tr>
+  <td><div>{{if .Label}}{{.Label}}{{end}}</div><div class="mono muted">{{.Npub}}</div></td>
+  <td>{{.Role}}</td>
+  <td>{{if .Enabled}}<span class="pill on">enabled</span>{{else}}<span class="pill off">disabled</span>{{end}}</td>
+  <td>{{if ne .Role "owner"}}<form method="post" action="/whitelist/toggle">
+      <input type="hidden" name="guest_npub" value="{{.Npub}}">
+      <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">
+      <button class="ghost">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>{{end}}</td>
+</tr>{{end}}
+</tbody></table>
+
+<div class="card">
+  <h2 style="margin-top:0">Add an identity</h2>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <form method="post" action="/whitelist/add">
+    <p><input type="text" name="guest_npub" placeholder="npub1…" required></p>
+    <p><input type="text" name="label" placeholder="label (optional), e.g. laptop"></p>
+    <p><input type="submit" value="Add to whitelist"></p>
+  </form>
+</div>
+</main></body></html>
