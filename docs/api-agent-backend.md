@@ -29,6 +29,8 @@ Long-poll sync of the authorized-address set.
 - If the backend cannot produce a delta from `n` (compaction), it replies
   with a full set (`"full": true`). Agent applies atomically per response.
 - The agent additionally does a full refresh every 15 min as safety net.
+- The set is service-agnostic: an authorized address may use every egress
+  service on the node (shared balance); only metering is per-service.
 
 ### `POST /v1/nodes/{node_id}/usage`
 
@@ -39,9 +41,12 @@ Batched byte-counter deltas, default every 30 s.
   "report_id": "01J9...",          // ULID, idempotency key
   "counter_epoch": "boot-7f3a",    // changes when counters reset (reboot/flush)
   "window_end": "2026-08-08T12:00:30Z",
-  "samples": [ { "addr": "fd10:...", "rx": 123456, "tx": 654321 } ]
+  "samples": [ { "service": "clearnet", "addr": "fd10:...", "rx": 123456, "tx": 654321 } ]
 }
 ```
+
+Samples are keyed by (service, addr); the backend weights them with the
+service's `rate_ppm` when decrementing the shared balance.
 
 Response: `{ "ack": "01J9...", "revoke": [ "fd10:..." ] }` — `revoke` lists
 addresses to remove from the set *immediately* (quota just exhausted),
@@ -52,8 +57,25 @@ on `counter_epoch` change the backend treats counters as reset.
 ### `POST /v1/nodes/{node_id}/heartbeat` (every 60 s)
 
 `{ "version": "...", "authz_rev": 413, "set_size": 1234 }` →
-`{ "config": { "usage_interval_s": 30, "grace_minutes": 240 } }` — lets the
-backend tune agent behavior without redeploys and detect stuck nodes.
+
+```json
+{
+  "config": {
+    "usage_interval_s": 30,
+    "grace_minutes": 240,
+    "services": [
+      { "key": "clearnet", "port": 1080 },
+      { "key": "tor", "port": 1081 }
+    ]
+  }
+}
+```
+
+The `services` list is the node's egress catalog: the agent renders the
+nftables gate (authz check, captive redirect, per-service counters) from it,
+so registering a new egress service requires no agent changes. This also
+lets the backend tune agent behavior without redeploys and detect stuck
+nodes.
 
 ## Failure semantics
 

@@ -68,6 +68,25 @@ entitlements             -- what actually authorizes traffic
   -- consumption order: earliest expires_at first
 ```
 
+## Egress services
+
+```
+services                 -- modular egress catalog (clearnet, tor, ...)
+  id            pk
+  key           text unique               -- "clearnet", "tor"
+  name          text                      -- display name
+  port          int unique not null       -- one port per service on every node
+  rate_ppm      bigint not null           -- consumption rate, parts-per-million:
+                                          -- 1_000_000 = 1.0x, 1_500_000 = 1.5x;
+                                          -- balance -= bytes * rate_ppm / 1e6
+  backend       text                      -- "dante" | "tor-socks" | ... (informational)
+  enabled       bool
+```
+
+Adding an egress layer = one `services` row + running its SOCKS endpoint on
+that port on the exit nodes. Authorization is account-level and shared across
+services (one `@authorized` set); only metering and rates are per-service.
+
 ## Accounting & nodes
 
 ```
@@ -85,11 +104,13 @@ usage_reports            -- idempotency ledger, one row per agent report
   window_end    timestamptz
   received_at
 
-usage_samples            -- per-address deltas, partitioned by month
+usage_samples            -- per-address, per-service deltas, partitioned by month
   report_id     fk -> usage_reports
+  service_id    fk -> services
   fips_addr     inet
   account_id    fk null                   -- resolved at ingest; null if unknown
-  rx_bytes, tx_bytes bigint
+  rx_bytes, tx_bytes bigint               -- raw bytes; weighted consumption =
+                                          -- (rx+tx) * services.rate_ppm / 1e6
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -115,8 +136,9 @@ sessions
 
 - Crediting is a single transaction keyed on `btcpay_invoice_id`
   (insert-or-ignore purchase settle + entitlement creation).
-- `volume_used` updates and exhaustion checks happen in one statement at
-  usage ingest; crossing the limit emits `del` to `authz_revisions` and the
-  inline `revoke` in the usage ack.
+- `volume_used` accumulates **rate-weighted** bytes (`(rx+tx) *
+  services.rate_ppm / 1e6`); updates and exhaustion checks happen in one
+  statement at usage ingest; crossing the limit emits `del` to
+  `authz_revisions` and the inline `revoke` in the usage ack.
 - Whitelist changes and entitlement expiry both write `authz_revisions`;
   a periodic sweep expires time-based entitlements between traffic events.

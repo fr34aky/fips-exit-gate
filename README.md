@@ -35,4 +35,8 @@ captive daemon, which redirects plain HTTP to the user portal and refuses
 everything else. The proxy is internet-egress only: fd00::/8 destinations are
 blocked, and fips-internal traffic is never metered.
 
+Egress is modular: each service (clearnet via Dante, Tor via a SocksPort,
+future overlays) is its own SOCKS endpoint on its own port behind the same
+generic gate, and draws on one shared balance at a per-service byte rate.
+
 See `docs/` for the full specifications and the implementation plan.
