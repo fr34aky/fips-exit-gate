@@ -250,3 +250,50 @@ func TestVerifyCaptiveToken(t *testing.T) {
 		t.Fatal("accepted tampered captive token")
 	}
 }
+
+func TestPortalBuyAutosettle(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p := testPortal(t, st, false)
+	p.autoSettle = true
+	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
+	srv := httptest.NewServer(routes(h, p, st, "admintok"))
+	defer srv.Close()
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	ownerPriv, ownerNpub, ownerAddr := newTestKey(t)
+
+	// Log in.
+	resp, _ := c.Get(srv.URL + "/auth/challenge")
+	var ch struct{ Challenge string }
+	json.NewDecoder(resp.Body).Decode(&ch)
+	resp.Body.Close()
+	ev := signAuthEvent(t, ownerPriv, ch.Challenge)
+	body, _ := json.Marshal(map[string]any{"event": ev})
+	resp, _ = c.Post(srv.URL+"/auth/verify", "application/json", strings.NewReader(string(body)))
+	resp.Body.Close()
+
+	// The packages page renders the catalog.
+	resp, _ = c.Get(srv.URL + "/packages")
+	page := readAll(resp)
+	if resp.StatusCode != 200 || !strings.Contains(page, "Buy") {
+		t.Fatalf("packages page did not render (status %d)", resp.StatusCode)
+	}
+
+	// Buy the first package (autosettle grants immediately).
+	pkgs, _ := st.ListPackages(ctx)
+	resp, err := c.PostForm(srv.URL+"/buy", url.Values{"package_id": {pkgs[0].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	full, _, _ := st.FullSet(ctx)
+	if !hasAddr(full, ownerAddr) {
+		t.Fatalf("owner %s not authorized after autosettled purchase", ownerNpub)
+	}
+}

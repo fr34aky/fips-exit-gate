@@ -98,6 +98,57 @@ func (h *handlers) adminCredit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "credited"})
 }
 
+func (h *handlers) adminListPackages(w http.ResponseWriter, r *http.Request) {
+	pkgs, err := h.store.ListPackages(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(pkgs))
+	for _, p := range pkgs {
+		out = append(out, map[string]any{
+			"id": p.ID, "kind": p.Kind, "name": p.Name,
+			"volume_bytes": p.VolumeBytes, "validity_days": p.ValidityDays, "price_msat": p.PriceMsat,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"packages": out})
+}
+
+func (h *handlers) adminCreatePackage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind      string `json:"kind"`
+		Name      string `json:"name"`
+		GB        int64  `json:"gb"`
+		Days      int    `json:"days"`
+		PriceSats int64  `json:"price_sats"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	id, err := h.store.CreatePackage(r.Context(), req.Kind, req.Name, req.GB*1_000_000_000, req.Days, req.PriceSats*1000)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+// adminSettle marks a purchase paid and grants its entitlement. This is the
+// same call the Phase-4 BTCPay webhook will make on invoice settlement.
+func (h *handlers) adminSettle(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PurchaseID string `json:"purchase_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := h.store.SettlePurchase(r.Context(), req.PurchaseID); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "settled"})
+}
+
 func (h *handlers) adminAuthz(w http.ResponseWriter, r *http.Request) {
 	members, rev, err := h.store.FullSet(r.Context())
 	if err != nil {

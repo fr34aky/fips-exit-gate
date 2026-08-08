@@ -215,3 +215,46 @@ func TestAddressInUse(t *testing.T) {
 		t.Fatalf("want ErrAddressInUse, got %v", err)
 	}
 }
+
+func TestPurchaseSettleGrantsAuthz(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pkgs, err := st.ListPackages(ctx)
+	if err != nil || len(pkgs) == 0 {
+		t.Fatalf("packages: %v (n=%d)", err, len(pkgs))
+	}
+	// Account exists (owner) but no entitlement yet.
+	if _, err := st.CreateAccount(ctx, npubA); err != nil {
+		t.Fatal(err)
+	}
+	full, _, _ := st.FullSet(ctx)
+	if setContains(full, addrOf(t, npubA)) {
+		t.Fatal("authorized before purchase settled")
+	}
+	// Buy the first package and settle it.
+	pid, err := st.CreatePurchase(ctx, npubA, pkgs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SettlePurchase(ctx, pid); err != nil {
+		t.Fatal(err)
+	}
+	full, _, _ = st.FullSet(ctx)
+	if !setContains(full, addrOf(t, npubA)) {
+		t.Fatal("not authorized after settle")
+	}
+	// Idempotent settle: replay must not create a second entitlement.
+	if err := st.SettlePurchase(ctx, pid); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM entitlements WHERE purchase_id=$1`, pid).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 entitlement for purchase, got %d", n)
+	}
+}

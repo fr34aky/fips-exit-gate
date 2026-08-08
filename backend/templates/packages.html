@@ -1,0 +1,27 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Buy data · fips-exit</title>{{template "styles" .}}</head><body><main>
+<div class="row" style="justify-content:space-between">
+  <h1 style="margin:0">Buy data</h1>
+  <a href="/dashboard"><button class="ghost">Back</button></a>
+</div>
+
+{{if .Pending}}<div class="card"><strong>Purchase pending.</strong>
+  <p class="muted">Payment (Bitcoin, Lightning, Monero) is coming soon. Your purchase will
+  activate automatically once paid.</p></div>{{end}}
+
+{{range .Packages}}
+<div class="card"><div class="row" style="justify-content:space-between">
+  <div>
+    <div><strong>{{.Name}}</strong></div>
+    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} · {{end}}valid {{.ValidityDays}} day(s)</div>
+  </div>
+  <div class="row">
+    <div class="pill">{{sats .PriceMsat}}</div>
+    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button>Buy</button></form>
+  </div>
+</div></div>
+{{else}}<div class="card">No packages available.</div>{{end}}
+
+<p class="muted">Payable in Bitcoin, Lightning, and Monero (Phase 4).</p>
+</main></body></html>

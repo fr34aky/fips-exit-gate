@@ -29,11 +29,12 @@ type portal struct {
 	captiveSecret   []byte
 	trustFipsSource bool
 	secureCookies   bool
+	autoSettle      bool // dev: settle purchases immediately (no payment)
 	tmpl            *template.Template
 }
 
 func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []byte, trustFips, secure bool) (*portal, error) {
-	tmpl, err := template.New("").Funcs(template.FuncMap{"bytes": humanBytes}).
+	tmpl, err := template.New("").Funcs(template.FuncMap{"bytes": humanBytes, "sats": sats}).
 		ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -55,6 +56,8 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /whitelist/add", p.whitelistAdd)
 	mux.HandleFunc("POST /whitelist/toggle", p.whitelistToggle)
 	mux.HandleFunc("GET /captive", p.captive)
+	mux.HandleFunc("GET /packages", p.packagesPage)
+	mux.HandleFunc("POST /buy", p.buy)
 }
 
 func (p *portal) root(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +207,43 @@ func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
+func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := p.session(r); !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	pkgs, err := p.store.ListPackages(r.Context())
+	if err != nil {
+		http.Error(w, "error loading packages", http.StatusInternalServerError)
+		return
+	}
+	p.render(w, "packages.html", map[string]any{"Packages": pkgs, "Pending": r.URL.Query().Get("pending") != ""})
+}
+
+func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	id, err := p.store.CreatePurchase(r.Context(), npub, strings.TrimSpace(r.FormValue("package_id")))
+	if err != nil {
+		http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
+		return
+	}
+	if p.autoSettle {
+		// Dev shortcut: no payment rail yet (Phase 4) — grant immediately.
+		if err := p.store.SettlePurchase(r.Context(), id); err != nil {
+			http.Error(w, "settle failed", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		return
+	}
+	// Real payment lands in Phase 4; the purchase is pending until then.
+	http.Redirect(w, r, "/packages?pending=1", http.StatusSeeOther)
+}
+
 func (p *portal) captive(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{"Title": "Sign in to continue", "Message": "This identity is not currently authorized for internet access."}
 	if addr, err := p.verifyCaptiveToken(r.URL.Query().Get("t")); err == nil {
@@ -320,6 +360,11 @@ func friendlyErr(err error) string {
 }
 
 func urlq(s string) string { return strings.ReplaceAll(template.URLQueryEscaper(s), "+", "%20") }
+
+// sats renders a millisatoshi price as a whole-sat string.
+func sats(msat int64) string {
+	return strconv.FormatInt(msat/1000, 10) + " sats"
+}
 
 func humanBytes(n int64) string {
 	const u = 1000

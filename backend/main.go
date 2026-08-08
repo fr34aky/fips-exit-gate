@@ -41,6 +41,9 @@ func main() {
 	if err := st.SeedDefaults(ctx); err != nil {
 		log.Fatalf("backend: seed: %v", err)
 	}
+	if err := st.SeedPackages(ctx); err != nil {
+		log.Fatalf("backend: seed packages: %v", err)
+	}
 
 	h := &handlers{
 		store:          st,
@@ -57,6 +60,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("backend: portal: %v", err)
 	}
+	p.autoSettle = os.Getenv("PORTAL_DEV_AUTOSETTLE") == "1"
 	srv := &http.Server{
 		Addr:              listen,
 		Handler:           routes(h, p, st, adminToken),
@@ -91,6 +95,9 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string) http.Han
 	mux.Handle("POST /admin/whitelist", requireAdmin(adminToken, h.adminWhitelist))
 	mux.Handle("POST /admin/credit", requireAdmin(adminToken, h.adminCredit))
 	mux.Handle("GET /admin/authz", requireAdmin(adminToken, h.adminAuthz))
+	mux.Handle("GET /admin/packages", requireAdmin(adminToken, h.adminListPackages))
+	mux.Handle("POST /admin/packages", requireAdmin(adminToken, h.adminCreatePackage))
+	mux.Handle("POST /admin/settle", requireAdmin(adminToken, h.adminSettle))
 
 	// User portal (login, dashboard, whitelist, captive landing).
 	p.routes(mux)

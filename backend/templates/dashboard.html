@@ -3,7 +3,10 @@
 <title>Dashboard · fips-exit</title>{{template "styles" .}}</head><body><main>
 <div class="row" style="justify-content:space-between">
   <h1 style="margin:0">Your account</h1>
-  <form method="post" action="/auth/logout"><button class="ghost">Sign out</button></form>
+  <div class="row">
+    <a href="/packages"><button>Buy data</button></a>
+    <form method="post" action="/auth/logout"><button class="ghost">Sign out</button></form>
+  </div>
 </div>
 <p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
 

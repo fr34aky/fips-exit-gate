@@ -19,9 +19,16 @@ server-rendered `html/template`.
   appended to `authz_revisions` (the revision agents poll). An address is
   authorized iff its account is active and has an active entitlement (a time
   pass, or a volume package with remaining balance).
+- **Package catalog**: a seeded catalog of buyable packages (volume bundles +
+  time passes). The portal `/packages` page lets a user buy one, creating a
+  **pending** purchase; **settling** it grants the entitlement. `SettlePurchase`
+  is idempotent (status guard + unique `entitlements.purchase_id`) — it is the
+  exact seam the Phase-4 BTCPay webhook will call. In dev,
+  `PORTAL_DEV_AUTOSETTLE=1` settles immediately so the flow works without a
+  payment rail.
 - **Admin API** (static bearer token): issue enroll tokens, create accounts,
-  manage whitelist entries, and credit entitlements. Crediting is the Phase-4
-  payment hook stand-in — until BTCPay lands, an admin grants packages here.
+  manage whitelist entries, credit entitlements directly, manage the catalog,
+  and settle purchases.
 
 ## User portal
 
@@ -75,6 +82,9 @@ curl $H -XPOST $URL/admin/credit     -d '{"npub":"npub1...","kind":"time","days"
 curl $H -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_npub":"npub1...","label":"laptop"}'
 curl $H -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_npub":"npub1...","enabled":false}'
 curl $H         $URL/admin/authz
+curl $H         $URL/admin/packages
+curl $H -XPOST $URL/admin/packages   -d '{"kind":"volume","name":"100 GB / 180d","gb":100,"days":180,"price_sats":70000}'
+curl $H -XPOST $URL/admin/settle     -d '{"purchase_id":"..."}'   # Phase-4 webhook seam
 ```
 
 ## Tests
