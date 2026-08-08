@@ -15,12 +15,13 @@ const authorizedJSON = `{"nftables":[
     "elem":["fd10:93b2:8586:6046:e42d:c089:3228:ccff","fd54:dc85:5ad5:c438:acd6:aa8:8495:13dd"]}}
 ]}`
 
+// nftables renders concatenated set elements as {"concat": [...]}.
 const acctJSON = `{"nftables":[
   {"metainfo":{"version":"1.0.9"}},
   {"set":{"family":"inet","table":"fips_exit","name":"acct","type":["ipv6_addr","inet_service"],"flags":["dynamic"],
     "elem":[
-      {"elem":{"val":["fd10:93b2:8586:6046:e42d:c089:3228:ccff",1080],"counter":{"packets":42,"bytes":123456}}},
-      {"elem":{"val":["fd54:dc85:5ad5:c438:acd6:aa8:8495:13dd",1081],"counter":{"packets":7,"bytes":2048}}}
+      {"elem":{"val":{"concat":["fd10:93b2:8586:6046:e42d:c089:3228:ccff",1080]},"counter":{"packets":42,"bytes":123456}}},
+      {"elem":{"val":{"concat":["fd54:dc85:5ad5:c438:acd6:aa8:8495:13dd",1081]},"counter":{"packets":7,"bytes":2048}}}
     ]}}
 ]}`
 
@@ -70,14 +71,18 @@ func TestParseAcctJSON(t *testing.T) {
 			if e.Elem == nil || e.Elem.Counter == nil {
 				continue
 			}
-			var val []json.RawMessage
-			if err := json.Unmarshal(e.Elem.Val, &val); err != nil || len(val) != 2 {
-				t.Fatalf("bad val: %s", e.Elem.Val)
+			parts, ok := concatParts(e.Elem.Val)
+			if !ok || len(parts) != 2 {
+				t.Fatalf("bad concat val: %s", e.Elem.Val)
 			}
 			var addrStr string
-			var port uint16
-			_ = json.Unmarshal(val[0], &addrStr)
-			_ = json.Unmarshal(val[1], &port)
+			if err := json.Unmarshal(parts[0], &addrStr); err != nil {
+				t.Fatalf("bad addr: %s", parts[0])
+			}
+			port, ok := parsePort(parts[1])
+			if !ok {
+				t.Fatalf("bad port: %s", parts[1])
+			}
 			addr := netip.MustParseAddr(addrStr)
 			acct[acctKey{Addr: addr, Port: port}] = e.Elem.Counter.Bytes
 		}

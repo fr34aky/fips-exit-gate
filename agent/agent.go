@@ -209,17 +209,23 @@ func (a *Agent) graceCheck() {
 // --- usage ------------------------------------------------------------------
 
 func (a *Agent) runUsage(ctx context.Context) {
+	// Brief prime so the first heartbeat can populate the service map and
+	// interval before the first collection; then collect-then-sleep so usage
+	// is reported promptly on startup rather than after a full interval.
+	if !sleep(ctx, 2*time.Second) {
+		return
+	}
 	for ctx.Err() == nil {
+		if err := a.collectAndBuffer(); err != nil {
+			log.Printf("agent: collect usage: %v", err)
+		}
+		a.flushBuffer(ctx)
 		a.mu.Lock()
 		interval := time.Duration(a.cfg.UsageIntervalS) * time.Second
 		a.mu.Unlock()
 		if !sleep(ctx, interval) {
 			return
 		}
-		if err := a.collectAndBuffer(); err != nil {
-			log.Printf("agent: collect usage: %v", err)
-		}
-		a.flushBuffer(ctx)
 	}
 }
 

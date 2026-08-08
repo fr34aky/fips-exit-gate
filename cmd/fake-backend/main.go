@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -44,6 +45,7 @@ type serviceInfo struct {
 
 func newServer() *server {
 	return &server{
+		rev:   1, // start >0 so a fresh agent (rev=0) gets the initial full set
 		authz: map[netip.Addr]string{},
 		usage: map[string]uint64{},
 		services: []serviceInfo{
@@ -58,15 +60,33 @@ func (s *server) enroll(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) authzHandler(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Simplest correct behavior: always answer with the full current set. (A
-	// real backend would honor rev/wait for long-poll deltas.)
-	addrs := make([]member, 0, len(s.authz))
-	for a, acct := range s.authz {
-		addrs = append(addrs, member{Addr: a, Account: acct})
+	clientRev, _ := strconv.ParseInt(r.URL.Query().Get("rev"), 10, 64)
+	wait, _ := strconv.Atoi(r.URL.Query().Get("wait"))
+	if wait <= 0 || wait > 55 {
+		wait = 25
 	}
-	writeJSON(w, map[string]any{"rev": s.rev, "full": true, "addresses": addrs})
+	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	// Long-poll: block until the revision moves past the client's, or timeout
+	// with 204 (unchanged). Always answer with the full current set otherwise.
+	for {
+		s.mu.Lock()
+		cur := s.rev
+		if clientRev != cur {
+			addrs := make([]member, 0, len(s.authz))
+			for a, acct := range s.authz {
+				addrs = append(addrs, member{Addr: a, Account: acct})
+			}
+			s.mu.Unlock()
+			writeJSON(w, map[string]any{"rev": cur, "full": true, "addresses": addrs})
+			return
+		}
+		s.mu.Unlock()
+		if time.Now().After(deadline) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (s *server) usageHandler(w http.ResponseWriter, r *http.Request) {

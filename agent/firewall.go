@@ -162,16 +162,16 @@ func (f *nftFirewall) ReadAcct() (map[acctKey]uint64, error) {
 			if e.Elem == nil || e.Elem.Counter == nil {
 				continue
 			}
-			var val []json.RawMessage
-			if err := json.Unmarshal(e.Elem.Val, &val); err != nil || len(val) != 2 {
+			parts, ok := concatParts(e.Elem.Val)
+			if !ok || len(parts) != 2 {
 				continue
 			}
 			var addrStr string
-			var port uint16
-			if err := json.Unmarshal(val[0], &addrStr); err != nil {
+			if err := json.Unmarshal(parts[0], &addrStr); err != nil {
 				continue
 			}
-			if err := json.Unmarshal(val[1], &port); err != nil {
+			port, ok := parsePort(parts[1])
+			if !ok {
 				continue
 			}
 			addr, err := netip.ParseAddr(addrStr)
@@ -195,6 +195,39 @@ func (f *nftFirewall) DeleteAcct(keys []acctKey) error {
 	stmt := fmt.Sprintf("delete element %s acct { %s }\n", f.table, strings.Join(parts, ", "))
 	_, err := f.run(stmt, "-f", "-")
 	return err
+}
+
+// concatParts extracts the components of a concatenated set-element value.
+// nftables renders these as {"concat": [a, b]}, but a bare [a, b] is also
+// accepted for robustness.
+func concatParts(val json.RawMessage) ([]json.RawMessage, bool) {
+	var wrapped struct {
+		Concat []json.RawMessage `json:"concat"`
+	}
+	if err := json.Unmarshal(val, &wrapped); err == nil && wrapped.Concat != nil {
+		return wrapped.Concat, true
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(val, &arr); err == nil {
+		return arr, true
+	}
+	return nil, false
+}
+
+// parsePort reads an inet_service element, which nft may render as a number
+// (1080) or, for well-known ports, a service name string ("socks").
+func parsePort(raw json.RawMessage) (uint16, bool) {
+	var n uint16
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if p, err := netip.ParseAddrPort("[::]:" + s); err == nil {
+			return p.Port(), true
+		}
+	}
+	return 0, false
 }
 
 func joinAddrs(addrs []netip.Addr) string {
