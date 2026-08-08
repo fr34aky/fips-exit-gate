@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fr34aky/fips-exit/pkg/fipsaddr"
+	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
 func main() {
