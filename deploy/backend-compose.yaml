@@ -1,0 +1,38 @@
+# fips-exit backend host (separate from the exit nodes): Postgres + control plane.
+# Copy backend.env.example to backend.env and fill in secrets.
+services:
+  db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PGUSER:-fips}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?set PGPASSWORD}
+      POSTGRES_DB: ${PGDATABASE:-fips_exit}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-fips}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: fips-exit/backend:dev
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${PGUSER:-fips}:${PGPASSWORD}@db:5432/${PGDATABASE:-fips_exit}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+      LISTEN: ":8080"
+    # Exit nodes reach this API; front it with TLS in production. Bound to
+    # localhost here — adjust for your network.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  pgdata:

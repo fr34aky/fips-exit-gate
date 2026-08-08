@@ -3,3 +3,4 @@
 
 # Local deployment secrets/config
 deploy/.env
+deploy/backend.env
