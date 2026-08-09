@@ -7,7 +7,14 @@
 {{if .FipsHint}}<div class="card"><div class="row">
   <div>You appear to be connecting over fips as<br><span class="mono">{{.FipsHint}}</span></div>
   <form method="post" action="/auth/fips"><button>Continue as this identity</button></form>
-</div></div>{{end}}
+</div></div>{{else if .FipsSource}}<div class="card">
+  <div>You're connecting over fips. Enter your npub to continue — it's verified
+  against your fips source address, so no signature is needed.</div>
+  <form method="post" action="/auth/fips" style="margin-top:.5rem">
+    <p><input type="text" name="npub" placeholder="npub1…" required></p>
+    <p><input type="submit" value="Continue as this identity"></p>
+  </form>
+</div>{{end}}
 
 <div class="card">
   <h2 style="margin-top:0">Nostr extension (NIP-07)</h2>

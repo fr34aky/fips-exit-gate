@@ -77,11 +77,23 @@ func (p *portal) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	hint := ""
+	data := map[string]any{}
 	if npub, ok := p.transparentNpub(r); ok {
-		hint = npub
+		data["FipsHint"] = npub // known address — one-click continue
+	} else if p.fipsSource(r) {
+		data["FipsSource"] = true // on fips but unknown — offer npub entry (verified against the source)
 	}
-	p.render(w, "login.html", map[string]any{"FipsHint": hint})
+	p.render(w, "login.html", data)
+}
+
+// fipsSource reports whether transparent login is enabled and the request
+// arrives from a valid fips (fd00::/8) source address.
+func (p *portal) fipsSource(r *http.Request) bool {
+	if !p.trustFipsSource {
+		return false
+	}
+	src, err := sourceAddr(r)
+	return err == nil && fipsaddr.Valid(src)
 }
 
 func (p *portal) authChallenge(w http.ResponseWriter, r *http.Request) {

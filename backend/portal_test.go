@@ -203,6 +203,33 @@ func TestTransparentLogin(t *testing.T) {
 	_ = ownerNpub
 }
 
+// TestLoginPageFipsNpubEntry covers the self-service onboarding path: an unknown
+// visitor arriving over fips is offered npub entry (verified against their source
+// address), while a non-fips visitor is not.
+func TestLoginPageFipsNpubEntry(t *testing.T) {
+	st := testStoreMain(t)
+	p := testPortal(t, st, true) // trustFipsSource on
+
+	// Unknown fips source -> login page offers npub entry.
+	req := httptest.NewRequest("GET", "/login", nil)
+	req.RemoteAddr = "[fd54:83c5:c670:a2fb:c5ef:f643:8541:9361]:40000"
+	rec := httptest.NewRecorder()
+	p.loginPage(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "connecting over fips") || !strings.Contains(body, `name="npub"`) {
+		t.Fatal("unknown fips source was not offered npub entry")
+	}
+
+	// Non-fips source -> no transparent form.
+	req2 := httptest.NewRequest("GET", "/login", nil)
+	req2.RemoteAddr = "203.0.113.5:40000"
+	rec2 := httptest.NewRecorder()
+	p.loginPage(rec2, req2)
+	if strings.Contains(rec2.Body.String(), "connecting over fips") {
+		t.Fatal("non-fips source was offered transparent login")
+	}
+}
+
 func hasAddr(ms []store.AuthzMember, a netip.Addr) bool {
 	for _, m := range ms {
 		if m.Addr == a {
