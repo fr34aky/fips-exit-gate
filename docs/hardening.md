@@ -72,3 +72,25 @@ tc class add dev $IF parent 1:1 classid 1:10 htb rate 20mbit ceil 50mbit   # per
 Volume (not rate) is already metered and enforced by the quota system: usage
 draws down the package balance and exhaustion revokes the address within a usage
 interval (see [maintenance](maintenance.md#revoke-or-suspend-access)).
+
+## Logging & privacy
+
+The design records **what** was used, not **where** it went.
+
+- **No destination logging.** Dante logs errors only (`log: error` on every
+  rule, `logoutput: stderr`), so successful connections and their destinations
+  are never written. Policy violations (blocked ports/destinations, failures)
+  are logged without payload. Don't switch to `log: connect`/`disconnect` in
+  production.
+- **Accounting is byte totals.** The usage ledger stores per-`(account, service,
+  source address)` byte counts — never destination hosts. Quota is enforced on
+  those totals.
+- **Bounded retention.** The exit/captive/agent containers cap their logs
+  (`json-file`, 10 MB × 3 via the `x-logging` anchor in
+  `deploy/docker-compose.yaml`); adjust to taste. Don't ship Dante logs to
+  long-term storage.
+- **Backend logs** contain operational data (npubs — which are public keys —
+  invoice ids, errors), not browsing activity. Keep them access-controlled and
+  rotate them.
+
+For the full trust/retention model see [threat-model.md](threat-model.md).

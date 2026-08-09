@@ -1,9 +1,18 @@
 # fips-exit backend host (separate from the exit nodes): Postgres + control plane.
 # Copy backend.env.example to backend.env and fill in secrets.
+
+# Bounded log retention. See docs/hardening.md#logging--privacy.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: docker.io/library/postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${PGUSER:-fips}
       POSTGRES_PASSWORD: ${PGPASSWORD:?set PGPASSWORD}
@@ -22,6 +31,7 @@ services:
       dockerfile: backend/Dockerfile
     image: fips-exit/backend:dev
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         condition: service_healthy

@@ -4,6 +4,15 @@
 # captive daemon must see the real fips source addresses, so every service uses
 # host networking. Load the nftables ruleset on the host FIRST (see up.sh),
 # then start this stack.
+
+# Bounded log retention (privacy): Dante logs errors only — no successful
+# connection/destination logging — but cap retention anyway. See docs/hardening.md.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   unbound:
     image: docker.io/klutchell/unbound:latest
@@ -17,6 +26,7 @@ services:
     image: fips-exit/clearnet:dev
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     # dns is ignored under host networking; the host resolv.conf must point at
     # unbound (127.0.0.1) — see up.sh.
     environment:
@@ -61,6 +71,7 @@ services:
     image: fips-exit/captive:dev
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CAPTIVE_LISTEN: "[::]:${CAPTIVE_PORT:-1088}"
       CAPTIVE_PORTAL_URL: ${CAPTIVE_PORTAL_URL:?set CAPTIVE_PORTAL_URL}
@@ -74,6 +85,7 @@ services:
       context: ..
       dockerfile: agent/Dockerfile
     image: fips-exit/agent:dev
+    logging: *default-logging
     profiles: ["agent"]
     network_mode: host
     restart: unless-stopped
