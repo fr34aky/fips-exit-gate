@@ -277,13 +277,17 @@ grant only once finalized (Lightning stays instant). Full runbook:
 Clients browse the Internet through the exit's SOCKS5 proxy while still reaching
 the fips mesh — the portal and every `.fips` service — natively. The repo ships
 a small **PAC** (proxy auto-config) template, [`deploy/fips.pac`](../deploy/fips.pac),
-that does exactly that split. Copy it and set `EXIT` to your exit node's fips
-address and clearnet port:
+that does exactly that split. Copy it and set `EXIT` to your exit node's
+**`<npub>.fips` name** and clearnet port:
 
 ```js
 // deploy/fips.pac
-var EXIT = "[fd6b:b19b:6700:c923:df48:31a8:698b:bb25]:1080";  // EXIT_FIPS_ADDR : CLEARNET_PORT
+var EXIT = "npub1…exit-host-npub….fips:1080";  // exit's <npub>.fips : CLEARNET_PORT
 ```
+
+Address the exit by its `<npub>.fips` name, **not** a raw `[fd..]` IPv6 literal:
+Firefox won't use a bracketed IPv6 literal as a SOCKS proxy target (the PAC
+fails to apply), and the name resolves mesh-wide and survives an address change.
 
 Then load it in the browser:
 

@@ -1,29 +1,33 @@
 // fips.pac — browser proxy auto-config for browsing the Internet through a
 // fips exit node.
 //
-//   Internet traffic         -> the exit's SOCKS5 proxy (DNS resolved server-side)
-//   .fips names & the mesh    -> DIRECT (reached natively over fips, never tunnelled
-//   localhost / fd00::/8         through the exit — this is how the portal loads)
+//   Internet traffic        -> the exit's SOCKS5 proxy (DNS resolved server-side)
+//   .fips names & fd00::/8   -> DIRECT (reached natively over fips; this is how
+//   localhost                   the portal and .fips services load)
 //
-// Usage:
-//   1. Set EXIT below to your exit node's fips address and clearnet SOCKS port
-//      (the EXIT_FIPS_ADDR and CLEARNET_PORT from its deploy/.env).
-//   2. Point the browser at this file as its automatic proxy configuration URL
-//      (file:///path/to/fips.pac, or an http/.fips URL you host it at).
-// See docs/install.md ("Client browser setup").
+// Set EXIT to your exit node's <npub>.fips name and clearnet SOCKS port.
+// Address the exit by its <npub>.fips NAME, not a raw [fd..] IPv6 literal:
+// Firefox will not use a bracketed IPv6 literal as a SOCKS proxy target. The
+// name also resolves mesh-wide and survives an address change.
+//
+// Load it as the browser's automatic proxy configuration URL (a file:///path, or
+// an http/.fips URL you host it at). See docs/install.md ("Client browser setup").
 
 function FindProxyForURL(url, host) {
-  // Exit node:  [fips-address]:clearnet-port
-  var EXIT = "[fd6b:b19b:6700:c923:df48:31a8:698b:bb25]:1080";
+  host = host.toLowerCase();
+
+  // Exit node: <npub>.fips : clearnet-port
+  var EXIT = "npub1lx2m36mtzpvae7caw6tphqzhuyufg82y63p8lvd8n6nvkdkw0thq08hdpz.fips:1080";
 
   // fips mesh (the portal and every .fips service) — reached natively, not via
   // the exit. Without this the portal itself would try to load through SOCKS.
-  if (dnsDomainIs(host, ".fips") || host == "fips") return "DIRECT";
+  if (dnsDomainIs(host, ".fips")) return "DIRECT";
 
-  // Localhost and fips ULA (fd00::/8) literals stay local too.
-  if (host == "localhost" || host == "::1" ||
-      shExpandMatch(host, "127.*") || shExpandMatch(host, "fd*:*"))
-    return "DIRECT";
+  // fips ULA (fd00::/8) address literals.
+  if (host.indexOf(":") !== -1 && host.substr(0, 2) === "fd") return "DIRECT";
+
+  // Localhost stays local.
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return "DIRECT";
 
   // Everything else is the Internet: send it through the exit. No DIRECT
   // fallback, so if the exit is down traffic fails closed instead of leaking.
