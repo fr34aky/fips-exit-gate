@@ -32,8 +32,8 @@ Read by `backend/` (see `backend/main.go`).
 | `CHALLENGE_SECRET` | random | HMAC key for login challenges. Set it in production. |
 | `CAPTIVE_TOKEN_SECRET` | — | Verifies captive redirect tokens. **Must equal the exit node's value.** |
 | `PORTAL_PUBLIC_URL` | `http://localhost:8080` | Public base URL; BTCPay redirects buyers back here after paying. Over fips, prefer the portal's `<npub>.fips` URL (see [Addressing the portal](#addressing-the-portal-over-fips)). |
-| `PORTAL_TRUST_FIPS_SOURCE` | `0` | `1` enables transparent fips-source login. Enable **only** on a fips-bound listener with no proxy masking the source (else addresses are spoofable). |
-| `PORTAL_SECURE_COOKIES` | secure | Any value except `0` = `Secure` cookies (HTTPS). Set `0` only for local HTTP testing. |
+| `PORTAL_TRUST_FIPS_SOURCE` | **on** | Transparent fips-source login. On by default (the portal is reached natively over fips). Set `0` **only** when a reverse proxy masks the client source (e.g. a public HTTPS portal) — otherwise everyone would appear as the proxy. |
+| `PORTAL_SECURE_COOKIES` | **off** | Off by default so login works over the fips portal (HTTP). Set `1` when the portal is served over HTTPS. |
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
 | `USAGE_INTERVAL_S` | `30` | Usage-report interval advertised to agents (seconds). |
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |

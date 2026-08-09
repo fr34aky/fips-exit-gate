@@ -54,8 +54,14 @@ func main() {
 		secretEnv("SESSION_SECRET"),
 		secretEnv("CHALLENGE_SECRET"),
 		[]byte(os.Getenv("CAPTIVE_TOKEN_SECRET")),
-		os.Getenv("PORTAL_TRUST_FIPS_SOURCE") == "1",
-		os.Getenv("PORTAL_SECURE_COOKIES") != "0",
+		// Transparent fips-source login is ON by default (the portal is meant to
+		// be reached natively over fips, and it shares the same source-address
+		// trust model the exit gate already relies on). Set 0 only when a reverse
+		// proxy masks the source (e.g. a public HTTPS-fronted portal).
+		os.Getenv("PORTAL_TRUST_FIPS_SOURCE") != "0",
+		// Secure cookies OFF by default so login works over the fips portal (HTTP).
+		// Set 1 when the portal is served over HTTPS.
+		os.Getenv("PORTAL_SECURE_COOKIES") == "1",
 	)
 	if err != nil {
 		log.Fatalf("backend: portal: %v", err)

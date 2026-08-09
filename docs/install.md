@@ -168,17 +168,19 @@ You now have a working exit. To let users **buy** access instead of admin
 credits, add BTCPay ([runbook](phase4-btcpay.md)); to add the **Tor** egress
 service, see [the Tor runbook](phase4b-tor.md).
 
-## 5. (Optional) portal login
+## 5. Portal login
 
 Users manage their account and packages at `PORTAL_PUBLIC_URL`:
 
 - **Nostr signer** (from anywhere): "Sign in with extension" (NIP-07), or paste
   a signed event from any signer (incl. Amber).
-- **Transparent fips login** (over fips only): set `PORTAL_TRUST_FIPS_SOURCE=1`
-  on a backend listener bound to the fips interface with no proxy masking the
-  source; the client's npub-derived address authenticates it with no signature.
-  Requires the fips firewall to allow the portal port — see
-  [Configuration](configuration.md#the-portal-and-the-fips-firewall).
+- **Transparent fips login** (over fips): **on by default** — when the backend
+  listens on the fips interface with no proxy masking the source, the client's
+  npub-derived address authenticates it with no signature. Requires the fips
+  firewall to allow the portal port — see
+  [Configuration](configuration.md#the-portal-and-the-fips-firewall). Set
+  `PORTAL_TRUST_FIPS_SOURCE=0` only behind a source-masking reverse proxy, and
+  `PORTAL_SECURE_COOKIES=1` when the portal is served over HTTPS.
 
 ## Uninstall / teardown
 

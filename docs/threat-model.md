@@ -54,10 +54,14 @@ Unauthenticated peers speak first bytes to it by design.
 
 ## 5. Portal authentication
 
-- Transparent fips login is enabled **only** on listeners bound to the fips
-  interface, with no reverse proxy in front (a proxy would mask/forgeable the
-  source address). The public listener never trusts source addresses or
-  `X-Forwarded-For` for identity.
+- Transparent fips login is **on by default**; it authenticates a client only
+  when the request arrives directly from an fd00::/8 source (the same
+  source-address trust the exit gate already relies on) and the client's npub
+  derives to that source. It never trusts `X-Forwarded-For`, so it can't be
+  spoofed at the app layer — its strength reduces to the mesh's L3 source
+  integrity (§1). Disable it (`PORTAL_TRUST_FIPS_SOURCE=0`) only behind a
+  reverse proxy that masks the source, where every client would otherwise
+  appear as the proxy.
 - Nostr challenge login: server-generated nonce, single-use, short expiry;
   signature verified against the claimed npub (NIP-07/NIP-55/NIP-46).
 - Sessions: 256-bit random IDs, HttpOnly/SameSite cookies, CSRF tokens on
