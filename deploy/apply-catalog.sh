@@ -15,14 +15,27 @@
 # available_days support (migration 0004+). Run ONCE.
 #
 # Usage:  URL=http://127.0.0.1:8080 ADMIN_TOKEN=... sh deploy/apply-catalog.sh
-# Needs:  curl, jq.
+# Needs:  curl, and jq OR python3.
 set -eu
 : "${URL:?set URL, e.g. http://127.0.0.1:8080}"
 : "${ADMIN_TOKEN:?set ADMIN_TOKEN}"
 H="Authorization: Bearer $ADMIN_TOKEN"
 
+# Extract .packages[].id from stdin JSON (jq if present, else python3).
+pkg_ids() {
+  if command -v jq >/dev/null 2>&1; then jq -r '.packages[].id'
+  elif command -v python3 >/dev/null 2>&1; then python3 -c 'import sys,json;[print(p["id"]) for p in json.load(sys.stdin)["packages"]]'
+  else echo "need jq or python3" >&2; exit 1; fi
+}
+# Pretty-print the catalog from stdin JSON.
+pkg_show() {
+  if command -v jq >/dev/null 2>&1; then jq -r '.packages[] | "  \(.name) — \(.price_msat/1000) sats"'
+  elif command -v python3 >/dev/null 2>&1; then python3 -c 'import sys,json;[print("  %s — %d sats"%(p["name"],p["price_msat"]//1000)) for p in json.load(sys.stdin)["packages"]]'
+  else cat; fi
+}
+
 echo "Deactivating existing packages..."
-curl -fsS -H "$H" "$URL/admin/packages" | jq -r '.packages[].id' | while read -r id; do
+curl -fsS -H "$H" "$URL/admin/packages" | pkg_ids | while read -r id; do
   curl -fsS -H "$H" -X DELETE "$URL/admin/packages/$id" >/dev/null && echo "  - $id"
 done
 
@@ -35,4 +48,4 @@ create '{"kind":"time","name":"Unlimited — 30 day pass","days":30,"price_sats"
 create '{"kind":"time","name":"Unlimited — 1 day pass (special)","days":1,"price_sats":21,"available_days":30}' "SPECIAL 1 day pass (21, 30d)"
 
 echo "Current catalog:"
-curl -fsS -H "$H" "$URL/admin/packages" | jq -r '.packages[] | "  \(.name) — \(.price_msat/1000) sats"'
+curl -fsS -H "$H" "$URL/admin/packages" | pkg_show
