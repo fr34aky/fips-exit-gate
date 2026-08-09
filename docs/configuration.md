@@ -25,9 +25,9 @@ Read by `backend/` (see `backend/main.go`).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | — (**required**) | Postgres DSN, e.g. `postgres://fips:pw@db:5432/fips_exit`. |
+| `DATABASE_URL` | — (**required**) | Postgres DSN, e.g. `postgres://fips:pw@db:5432/fips_exit`. Under `backend-compose.yaml` this is **built for you** from `PGUSER`/`PGPASSWORD`/`PGDATABASE` (set those in `backend.env` instead — see below). |
 | `ADMIN_TOKEN` | — (**required**) | Bearer token protecting `/admin`. |
-| `LISTEN` | `:8080` | Listen address. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. |
+| `LISTEN` | `:8080` | Listen address. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. For **transparent fips login** the backend must see the client's real source address — run it with **host networking**, not behind bridge NAT (see note below). |
 | `SESSION_SECRET` | random | HMAC key for portal session cookies. Set it, or sessions drop on restart. |
 | `CHALLENGE_SECRET` | random | HMAC key for login challenges. Set it in production. |
 | `CAPTIVE_TOKEN_SECRET` | — | Verifies captive redirect tokens. **Must equal the exit node's value.** |
@@ -54,6 +54,21 @@ Read by `backend/` (see `backend/main.go`).
 See the [BTCPay runbook](phase4-btcpay.md) for the required store **Transaction
 Speed** setting (≥ 1 confirmation) that governs on-chain finalization.
 
+**Under `backend-compose.yaml`** you don't set `DATABASE_URL` directly — set
+these, which also configure the bundled Postgres:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PGUSER` | `fips` | Postgres user (compose builds the DSN from it). |
+| `PGPASSWORD` | — (**required**) | Postgres password. |
+| `PGDATABASE` | `fips_exit` | Postgres database name. |
+
+**Transparent login & host networking.** Transparent fips login only works if
+the backend sees the client's genuine npub-derived source address. Behind a
+bridge/NAT (the default published-port setup) every client appears as the
+gateway, so run the backend with host networking when it serves the portal over
+fips — or set `PORTAL_TRUST_FIPS_SOURCE=0` and use nostr-signer login instead.
+
 ## Exit node (`deploy/.env`)
 
 Consumed by `docker-compose.yaml` and `up.sh`. Also passed to the Dante and
@@ -62,7 +77,7 @@ captive containers.
 | Variable | Example | Purpose |
 |---|---|---|
 | `FIPS_IF` | `fips0` | fips TUN interface; the gate only touches traffic ingressing here. |
-| `EXIT_FIPS_ADDR` | `fd..:..` | This node's fips address; services listen on it and the gate matches it. |
+| `EXIT_FIPS_ADDR` | `fd6b:b19b:6700:c923:df48:31a8:698b:bb25` | This node's fips address; services listen on it and the gate matches it. |
 | `EXTERNAL_IF` | `eth0` | Public egress interface (IPv4/IPv6) Dante exits from. |
 | `CLEARNET_PORT` | `1080` | Dante SOCKS port. |
 | `CAPTIVE_PORT` | `1088` | Captive daemon port (redirect target for unauthorized traffic). |
@@ -70,6 +85,7 @@ captive containers.
 | `WORKERS` | `4` | Dante worker processes. |
 | `CAPTIVE_PORTAL_URL` | `http://<npub>.fips:8080/captive` | Where the captive `302` sends unauthorized clients. Prefer the portal host's `<npub>.fips` URL (see note below). |
 | `CAPTIVE_TOKEN_SECRET` | (secret) | Signs the captive token. **Must equal the backend's value.** |
+| `MAX_CONNS_PER_SRC` | `0` | Per-source concurrent-connection ceiling baked into the gate by `render-nftables.sh` (e.g. `256`). `0` = disabled. See [Hardening](hardening.md). |
 
 The same file also carries the agent variables below when the agent runs under
 compose.
@@ -145,7 +161,8 @@ only for an agent-less static node (`go run ./cmd/fips-derive npub1... >> allowl
 ### `render-nftables.sh` env
 
 Used by `up.sh` (which sources `deploy/.env`): `FIPS_IF`, `EXIT_FIPS_ADDR`,
-`CAPTIVE_PORT`, `SERVICES_FILE` (default `services.conf`), `ALLOWLIST_FILE`
+`CAPTIVE_PORT`, `MAX_CONNS_PER_SRC` (per-source connection ceiling, `0` =
+disabled), `SERVICES_FILE` (default `services.conf`), `ALLOWLIST_FILE`
 (default `allowlist.txt`).
 
 ### `deploy/unbound.conf`
