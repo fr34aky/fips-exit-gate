@@ -80,6 +80,7 @@ and never metered.
 - **[Troubleshooting](docs/troubleshooting.md)** — symptoms, causes, and fixes (including hard-won gotchas).
 - **[Maintenance](docs/maintenance.md)** — add nodes/services, admin ops, rotate secrets, back up, upgrade.
 - **[Observability](docs/observability.md)** — Prometheus `/metrics` on every service, plus scrape config and alert rules.
+- **[Hardening](docs/hardening.md)** — egress abuse policy, per-account ceilings, logging/privacy.
 
 Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/api-agent-backend.md) · [data model](docs/data-model.md) · [threat model](docs/threat-model.md) · payments: [BTCPay](docs/phase4-btcpay.md) · [Tor egress](docs/phase4b-tor.md).
 
