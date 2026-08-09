@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 
@@ -68,7 +69,7 @@ func (s *Store) AuthNode(ctx context.Context, nodeID, token string) error {
 		// Malformed UUID etc. read as unauthorized rather than 500.
 		return ErrUnauthorized
 	}
-	if hash != sha256Hex(token) {
+	if subtle.ConstantTimeCompare([]byte(hash), []byte(sha256Hex(token))) != 1 {
 		return ErrUnauthorized
 	}
 	return nil

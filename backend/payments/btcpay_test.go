@@ -108,6 +108,11 @@ func TestVerifyWebhook(t *testing.T) {
 	if VerifyWebhook(secret, body, "sha256=nothex") {
 		t.Fatal("non-hex accepted")
 	}
+	// Fail-safe: an empty secret can never verify, even against a MAC computed
+	// with an empty key (guards a misconfigured backend against forged webhooks).
+	if VerifyWebhook(nil, body, SignWebhook(nil, body)) {
+		t.Fatal("empty secret verified a webhook")
+	}
 }
 
 // srv0 returns the test server's base URL from the request host.

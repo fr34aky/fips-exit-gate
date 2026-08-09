@@ -142,8 +142,13 @@ type WebhookEvent struct {
 }
 
 // VerifyWebhook checks the BTCPay-Sig header ("sha256=<hex>") against an
-// HMAC-SHA256 of the raw request body keyed by the webhook secret.
+// HMAC-SHA256 of the raw request body keyed by the webhook secret. An empty
+// secret can never verify — a fail-safe so a misconfigured backend rejects
+// (rather than accepts) forged webhooks.
 func VerifyWebhook(secret, body []byte, sigHeader string) bool {
+	if len(secret) == 0 {
+		return false
+	}
 	const prefix = "sha256="
 	if !strings.HasPrefix(sigHeader, prefix) {
 		return false

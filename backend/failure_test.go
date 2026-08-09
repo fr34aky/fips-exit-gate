@@ -57,3 +57,42 @@ func TestAuthVerifyRejectsStaleEvent(t *testing.T) {
 		t.Fatalf("stale auth event accepted: status %d", resp.StatusCode)
 	}
 }
+
+// TestAuthVerifyRejectsWrongKind covers the cross-app-signing defense: a
+// correctly-signed, fresh event carrying a valid challenge but the WRONG kind
+// (e.g. an ordinary note) must be rejected.
+func TestAuthVerifyRejectsWrongKind(t *testing.T) {
+	st := testStoreMain(t)
+	p := testPortal(t, st, false)
+	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, ""))
+	defer srv.Close()
+
+	resp, _ := http.Get(srv.URL + "/auth/challenge")
+	var ch struct{ Challenge string }
+	json.NewDecoder(resp.Body).Decode(&ch)
+	resp.Body.Close()
+
+	priv, _, _ := newTestKey(t)
+	e := nostr.Event{
+		Kind:      1, // ordinary note, not the auth kind
+		CreatedAt: time.Now().Unix(),
+		Tags:      [][]string{{"challenge", ch.Challenge}},
+		Content:   "",
+	}
+	e.Pubkey = hex.EncodeToString(priv.PubKey().SerializeCompressed()[1:33])
+	id, _ := nostr.ComputeID(&e)
+	e.ID = hex.EncodeToString(id[:])
+	sig, _ := schnorr.Sign(priv, id[:])
+	e.Sig = hex.EncodeToString(sig.Serialize())
+
+	body, _ := json.Marshal(map[string]any{"event": e})
+	resp, err := http.Post(srv.URL+"/auth/verify", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong-kind auth event accepted: status %d", resp.StatusCode)
+	}
+}

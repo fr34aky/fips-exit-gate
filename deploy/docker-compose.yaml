@@ -31,6 +31,7 @@ services:
     # unbound (127.0.0.1) — see up.sh.
     environment:
       FIPS_IF: ${FIPS_IF:?set FIPS_IF}
+      EXIT_FIPS_ADDR: ${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}
       EXTERNAL_IF: ${EXTERNAL_IF:?set EXTERNAL_IF}
       CLEARNET_PORT: ${CLEARNET_PORT:-1080}
       WORKERS: ${WORKERS:-4}

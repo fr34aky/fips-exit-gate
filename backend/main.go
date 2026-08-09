@@ -69,9 +69,18 @@ func main() {
 	// portal falls back to pending purchases (or dev autosettle).
 	var ph *payHandler
 	if pc := newPaymentsClient(); pc != nil {
+		whSecret := os.Getenv("BTCPAY_WEBHOOK_SECRET")
+		if whSecret == "" {
+			// Without it the webhook HMAC can't be verified and settlements would
+			// be forgeable — refuse to start rather than run insecurely.
+			log.Fatal("backend: BTCPAY_WEBHOOK_SECRET is required when payments are enabled")
+		}
 		p.pay = pc
-		ph = &payHandler{store: st, secret: []byte(os.Getenv("BTCPAY_WEBHOOK_SECRET")), metrics: m.webhook}
+		ph = &payHandler{store: st, secret: []byte(whSecret), metrics: m.webhook}
 		log.Printf("backend: BTCPay payments enabled")
+	}
+	if os.Getenv("METRICS_TOKEN") == "" {
+		log.Printf("backend: METRICS_TOKEN unset — /metrics is open; restrict it by network")
 	}
 
 	srv := &http.Server{

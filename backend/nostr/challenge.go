@@ -17,6 +17,12 @@ import (
 // ChallengeTTLSeconds is how long an issued challenge is valid.
 const ChallengeTTLSeconds = 120
 
+// AuthEventKind is the nostr event kind required for a login (NIP-42 style).
+// Requiring a specific kind — plus the challenge in a tag (not free content) —
+// prevents an attacker from replaying a victim's ordinary signed note (kind 1)
+// whose text happens to contain the challenge.
+const AuthEventKind = 27235
+
 // IssueChallenge returns a signed challenge string valid for ChallengeTTLSeconds.
 func IssueChallenge(secret []byte, nowUnix int64) string {
 	var nonce [16]byte
@@ -46,15 +52,17 @@ func VerifyChallenge(secret []byte, challenge string, nowUnix int64) error {
 	return nil
 }
 
-// ExtractChallenge returns the challenge an auth event carries, looked for first
-// in a ["challenge", <value>] tag (NIP-42 style) then in the content.
+// ExtractChallenge returns the challenge an auth event carries in its
+// ["challenge", <value>] tag (NIP-42 style), or "" if absent. It deliberately
+// does NOT fall back to the event content — accepting content-as-challenge would
+// let a signed ordinary note authenticate.
 func ExtractChallenge(e *Event) string {
 	for _, t := range e.Tags {
 		if len(t) >= 2 && t[0] == "challenge" {
 			return t[1]
 		}
 	}
-	return e.Content
+	return ""
 }
 
 func macOf(secret []byte, msg string) string {

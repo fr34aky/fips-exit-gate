@@ -126,6 +126,10 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		p.authFail(w, jsonReq, "signature did not verify")
 		return
 	}
+	if ev.Kind != nostr.AuthEventKind {
+		p.authFail(w, jsonReq, "wrong event kind")
+		return
+	}
 	now := time.Now().Unix()
 	if err := nostr.VerifyChallenge(p.challengeSecret, nostr.ExtractChallenge(&ev), now); err != nil {
 		p.authFail(w, jsonReq, "invalid or expired challenge")

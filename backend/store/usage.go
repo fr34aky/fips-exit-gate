@@ -12,6 +12,12 @@ type svcMeta struct {
 	rate int64
 }
 
+// maxSampleBytes clamps a single usage sample. A 30s window can't plausibly
+// carry a terabyte; the clamp also guards the uint64->int64 conversion and the
+// weighted-bytes multiplication below against overflow from a buggy or hostile
+// node report.
+const maxSampleBytes = 1 << 40 // ~1.1 TB
+
 // IngestUsage records a usage report idempotently (keyed on report_id),
 // attributing rate-weighted bytes to each account's earliest-expiring volume
 // entitlement, then recomputes the authorized set. It returns addresses to
@@ -38,6 +44,10 @@ func (s *Store) IngestUsage(ctx context.Context, nodeID string, r ReportInput) (
 		fresh = true
 
 		for _, smp := range r.Samples {
+			sampleBytes := smp.Bytes
+			if sampleBytes > maxSampleBytes {
+				sampleBytes = maxSampleBytes
+			}
 			meta, ok := services[smp.Service]
 			var svcID any
 			if ok {
@@ -53,11 +63,14 @@ func (s *Store) IngestUsage(ctx context.Context, nodeID string, r ReportInput) (
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO usage_samples(report_id, service_id, fips_addr, account_id, bytes)
 				 VALUES ($1, $2, $3::inet, $4, $5)`,
-				r.ReportID, svcID, smp.Addr.String(), accountID, int64(smp.Bytes)); err != nil {
+				r.ReportID, svcID, smp.Addr.String(), accountID, int64(sampleBytes)); err != nil {
 				return err
 			}
 			if accountID != nil && ok && meta.rate > 0 {
-				weighted := int64(smp.Bytes) * meta.rate / 1_000_000
+				// bytes * rate / 1e6, computed divide-first so it can't overflow
+				// int64 even at the clamp ceiling with a large rate.
+				b := int64(sampleBytes)
+				weighted := b/1_000_000*meta.rate + b%1_000_000*meta.rate/1_000_000
 				if err := consumeVolume(ctx, tx, *accountID, weighted); err != nil {
 					return err
 				}

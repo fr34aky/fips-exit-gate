@@ -36,6 +36,18 @@ docker run --rm --entrypoint sockd -v /tmp/s.conf:/tmp/s.conf:ro fips-exit/clear
 Rules are first-match, top-to-bottom; keep the blocks above the final
 `socks pass … command: connect`.
 
+### Cloud metadata
+
+`sockd.conf` blocks `169.254.0.0/16` (covering `169.254.169.254`) and all of
+`fd00::/8` (covering the IPv6 IMDS `fd00:ec2::254`), and Dante refuses
+IPv4-mapped IPv6 so `::ffff:169.254.169.254` can't slip past. If the exit runs
+on a cloud VM, add a **host-level** egress block as defence-in-depth so nothing
+on the box (not just the proxy) can reach the metadata endpoint:
+
+```sh
+nft add rule inet filter output ip daddr 169.254.169.254 drop
+```
+
 ## Per-account ceilings
 
 ### Concurrent connections (nftables)

@@ -84,8 +84,10 @@ func TestExtractChallenge(t *testing.T) {
 	if got := ExtractChallenge(e); got != "abc" {
 		t.Fatalf("tag challenge = %q", got)
 	}
+	// No challenge tag -> empty. Content is NOT a fallback, so a signed ordinary
+	// note can't smuggle a challenge in its text.
 	e2 := &Event{Content: "xyz"}
-	if got := ExtractChallenge(e2); got != "xyz" {
-		t.Fatalf("content challenge = %q", got)
+	if got := ExtractChallenge(e2); got != "" {
+		t.Fatalf("expected empty challenge without a tag, got %q", got)
 	}
 }
