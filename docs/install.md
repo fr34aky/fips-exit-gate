@@ -63,20 +63,20 @@ cp backend.env.example backend.env          # then edit — see below
 chmod 600 backend.env
 ```
 
-Fill in `backend.env`. Example values (generate every secret with
-`openssl rand -base64 32` — the `…` below stands for the rest of a real one):
+Fill in `backend.env`. Generate every secret yourself — the `$(…)` below is the
+command to run, not a value to copy (never ship a secret from these docs):
 
 ```sh
 # --- Postgres ---
 PGUSER=fips
-PGPASSWORD=8Qk4wPw2qf5aEQH0aay…       # DB password
+PGPASSWORD=$(openssl rand -hex 24)              # DB password — hex, so it's URL-safe in the DSN
 PGDATABASE=fips_exit
 
-# --- Admin + portal secrets (openssl rand -base64 32 each) ---
-ADMIN_TOKEN=cIpqUa4x0ko6bQ…Qk4w=      # protects the /admin API
-SESSION_SECRET=Rk9mQ2p…               # portal session cookies (set it, or sessions drop on restart)
-CHALLENGE_SECRET=Vb7xLp0…             # login challenges
-CAPTIVE_TOKEN_SECRET=Pgbrp/w8o4ub…    # MUST equal the exit node's value, byte-for-byte
+# --- Admin + portal secrets ---
+ADMIN_TOKEN=$(openssl rand -base64 32)          # protects the /admin API
+SESSION_SECRET=$(openssl rand -base64 32)       # portal session cookies (set it, or sessions drop on restart)
+CHALLENGE_SECRET=$(openssl rand -base64 32)     # login challenges
+CAPTIVE_TOKEN_SECRET=$(openssl rand -base64 32) # MUST equal the exit node's value, byte-for-byte
 
 # --- Portal reachability + login ---
 # Base URL of the portal (buyers return here after paying). Over fips, use the
@@ -138,7 +138,7 @@ EXTERNAL_IF=eth0                                         # public egress interfa
 # --- Captive redirect (unauthorized clients) ---
 # Use the portal host's <npub>.fips URL over fips (HTTP), or your public portal URL.
 CAPTIVE_PORTAL_URL=http://npub1lx2m36mtzpvae7caw6tphqzhuyufg82y63p8lvd8n6nvkdkw0thq08hdpz.fips:8080/captive
-CAPTIVE_TOKEN_SECRET=Pgbrp/w8o4ub…                       # MUST equal the backend's value, byte-for-byte
+CAPTIVE_TOKEN_SECRET=<paste the backend's CAPTIVE_TOKEN_SECRET>   # MUST equal it byte-for-byte
 
 # --- Agent → backend ---
 FIPS_AGENT_BACKEND_URL=http://127.0.0.1:8080   # plain HTTP if co-located; https://backend.example:8080 behind TLS
