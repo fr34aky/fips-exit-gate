@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -28,7 +29,9 @@ type Package struct {
 func (s *Store) ListPackages(ctx context.Context) ([]Package, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id::text, kind, name, COALESCE(volume_bytes, 0), validity_days, price_msat
-		 FROM package_types WHERE active ORDER BY price_msat`)
+		 FROM package_types
+		 WHERE active AND (available_until IS NULL OR available_until > now())
+		 ORDER BY price_msat`)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +52,8 @@ func (s *Store) GetPackage(ctx context.Context, id string) (Package, error) {
 	var p Package
 	err := s.pool.QueryRow(ctx,
 		`SELECT id::text, kind, name, COALESCE(volume_bytes, 0), validity_days, price_msat
-		 FROM package_types WHERE id = $1 AND active`, id).
+		 FROM package_types
+		 WHERE id = $1 AND active AND (available_until IS NULL OR available_until > now())`, id).
 		Scan(&p.ID, &p.Kind, &p.Name, &p.VolumeBytes, &p.ValidityDays, &p.PriceMsat)
 	if err == pgx.ErrNoRows {
 		return Package{}, ErrPackageNotFound
@@ -58,17 +62,32 @@ func (s *Store) GetPackage(ctx context.Context, id string) (Package, error) {
 }
 
 // CreatePackage adds a catalog entry (admin). volumeBytes is ignored for time.
-func (s *Store) CreatePackage(ctx context.Context, kind, name string, volumeBytes int64, validityDays int, priceMsat int64) (string, error) {
+// availableUntil, when non-nil, hides the entry from the catalog after that
+// instant (a time-limited promo); nil means always available.
+func (s *Store) CreatePackage(ctx context.Context, kind, name string, volumeBytes int64, validityDays int, priceMsat int64, availableUntil *time.Time) (string, error) {
 	var vb any
 	if kind == "volume" {
 		vb = volumeBytes
 	}
 	var id string
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO package_types(kind, name, volume_bytes, validity_days, price_msat)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
-		kind, name, vb, validityDays, priceMsat).Scan(&id)
+		`INSERT INTO package_types(kind, name, volume_bytes, validity_days, price_msat, available_until)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
+		kind, name, vb, validityDays, priceMsat, availableUntil).Scan(&id)
 	return id, err
+}
+
+// DeactivatePackage soft-deletes a catalog entry (admin): it leaves the catalog
+// but existing purchases and entitlements are unaffected.
+func (s *Store) DeactivatePackage(ctx context.Context, id string) error {
+	ct, err := s.pool.Exec(ctx, `UPDATE package_types SET active = false WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrPackageNotFound
+	}
+	return nil
 }
 
 // CreatePurchase records a pending purchase for an npub's account against a
@@ -170,13 +189,13 @@ func (s *Store) SeedPackages(ctx context.Context) error {
 		days        int
 		priceMsat   int64
 	}{
-		{"volume", "10 GB / 30 days", 10_000_000_000, 30, 10_000_000},
-		{"volume", "50 GB / 90 days", 50_000_000_000, 90, 40_000_000},
-		{"time", "Unlimited — 1 day pass", 0, 1, 5_000_000},
-		{"time", "Unlimited — 30 day pass", 0, 30, 80_000_000},
+		{"time", "Unlimited — 1 day pass", 0, 1, 2_000_000},
+		{"volume", "50 GB / 30 days", 50_000_000_000, 30, 5_000_000},
+		{"volume", "500 GB / 90 days", 500_000_000_000, 90, 15_000_000},
+		{"time", "Unlimited — 30 day pass", 0, 30, 10_000_000},
 	}
 	for _, d := range defaults {
-		if _, err := s.CreatePackage(ctx, d.kind, d.name, d.volumeBytes, d.days, d.priceMsat); err != nil {
+		if _, err := s.CreatePackage(ctx, d.kind, d.name, d.volumeBytes, d.days, d.priceMsat, nil); err != nil {
 			return err
 		}
 	}

@@ -19,9 +19,12 @@ curl -H "$H" -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_np
 curl -H "$H" -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_npub":"npub1...","enabled":false}'  # disable a guest
 curl -H "$H"        $URL/admin/authz       # current authorized set
 
-# Catalog
+# Catalog  (price_sats is in sats; add "available_days":N for a time-limited promo)
 curl -H "$H"        $URL/admin/packages
 curl -H "$H" -XPOST $URL/admin/packages   -d '{"kind":"volume","name":"100 GB / 180d","gb":100,"days":180,"price_sats":70000}'
+curl -H "$H" -XPOST $URL/admin/packages   -d '{"kind":"time","name":"1 day pass (special)","days":1,"price_sats":21,"available_days":30}'  # promo, hidden after 30d
+curl -H "$H" -XDELETE $URL/admin/packages/<id>   # deactivate a package (leaves the catalog; existing purchases unaffected)
+# Replace the whole catalog at once: deploy/apply-catalog.sh  (URL=... ADMIN_TOKEN=... sh deploy/apply-catalog.sh)
 curl -H "$H"        $URL/admin/services
 curl -H "$H" -XPOST $URL/admin/services   -d '{"key":"tor","name":"Tor","port":1081,"rate_ppm":1500000}'
 

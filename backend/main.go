@@ -155,6 +155,7 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	mux.Handle("GET /admin/authz", requireAdmin(adminToken, h.adminAuthz))
 	mux.Handle("GET /admin/packages", requireAdmin(adminToken, h.adminListPackages))
 	mux.Handle("POST /admin/packages", requireAdmin(adminToken, h.adminCreatePackage))
+	mux.Handle("DELETE /admin/packages/{id}", requireAdmin(adminToken, h.adminDeactivatePackage))
 	mux.Handle("POST /admin/settle", requireAdmin(adminToken, h.adminSettle))
 	mux.Handle("GET /admin/services", requireAdmin(adminToken, h.adminListServices))
 	mux.Handle("POST /admin/services", requireAdmin(adminToken, h.adminCreateService))

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/fr34aky/fips-exit-gate/backend/store"
 )
@@ -116,21 +118,40 @@ func (h *handlers) adminListPackages(w http.ResponseWriter, r *http.Request) {
 
 func (h *handlers) adminCreatePackage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kind      string `json:"kind"`
-		Name      string `json:"name"`
-		GB        int64  `json:"gb"`
-		Days      int    `json:"days"`
-		PriceSats int64  `json:"price_sats"`
+		Kind          string `json:"kind"`
+		Name          string `json:"name"`
+		GB            int64  `json:"gb"`
+		Days          int    `json:"days"`
+		PriceSats     int64  `json:"price_sats"`
+		AvailableDays int    `json:"available_days"` // >0 = time-limited promo: hidden after N days
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	id, err := h.store.CreatePackage(r.Context(), req.Kind, req.Name, req.GB*1_000_000_000, req.Days, req.PriceSats*1000)
+	var until *time.Time
+	if req.AvailableDays > 0 {
+		t := time.Now().Add(time.Duration(req.AvailableDays) * 24 * time.Hour)
+		until = &t
+	}
+	id, err := h.store.CreatePackage(r.Context(), req.Kind, req.Name, req.GB*1_000_000_000, req.Days, req.PriceSats*1000, until)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+// adminDeactivatePackage soft-deletes a catalog entry (DELETE /admin/packages/{id}).
+func (h *handlers) adminDeactivatePackage(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.DeactivatePackage(r.Context(), r.PathValue("id")); err != nil {
+		if errors.Is(err, store.ErrPackageNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deactivated"})
 }
 
 // adminSettle marks a purchase paid and grants its entitlement. This is the

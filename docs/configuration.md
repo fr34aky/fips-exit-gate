@@ -184,7 +184,11 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" -XPOST $URL/admin/services \
 `rate_ppm` is parts-per-million (`1000000` = 1.0×). The shared balance is
 decremented by `bytes × rate_ppm / 1e6`. **Packages** (volume bundles + time
 passes) are managed via `/admin/packages`; a default catalog is seeded on first
-start. See [Maintenance](maintenance.md#admin-quick-reference).
+start. Prices are in **sats** (`price_sats`). A package may carry an
+`available_days` window (POST) to make it a **time-limited promo** — the catalog
+hides it after that many days, but anyone who already bought it keeps their pass;
+`DELETE /admin/packages/{id}` deactivates one. To set the whole catalog at once,
+use `deploy/apply-catalog.sh`. See [Maintenance](maintenance.md#admin-quick-reference).
 
 ## Addressing the portal over fips
 
