@@ -43,6 +43,8 @@ services:
       BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
       # Reach BTCPay's .onion via the Tor container's SOCKS proxy (see btcpay-compose.yaml).
       BTCPAY_SOCKS5: ${BTCPAY_SOCKS5:-}
+      # Metrics: if set, /metrics requires this bearer token (see docs/observability.md).
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     # Exit nodes reach this API; front it with TLS in production. Bound to
     # localhost here — adjust for your network.
     ports:

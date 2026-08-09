@@ -1,0 +1,28 @@
+# Example Prometheus scrape config for a fips-exit deployment.
+# Adjust targets to your hosts/ports. See docs/observability.md.
+global:
+  scrape_interval: 30s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  # Backend control plane. /metrics is open unless METRICS_TOKEN is set; if it is,
+  # uncomment the authorization block and use the same value.
+  - job_name: fips-exit-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['backend:8080']
+    # authorization:
+    #   type: Bearer
+    #   credentials: "<METRICS_TOKEN>"
+
+  # Exit-node agent (FIPS_AGENT_METRICS_ADDR, e.g. :9101). One target per node.
+  - job_name: fips-exit-agent
+    static_configs:
+      - targets: ['exit-01:9101']
+
+  # Exit-node captive daemon (CAPTIVE_METRICS_ADDR, e.g. :9102).
+  - job_name: fips-exit-captive
+    static_configs:
+      - targets: ['exit-01:9102']

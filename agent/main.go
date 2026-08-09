@@ -38,6 +38,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Metrics (Prometheus text format) if an address is configured.
+	if addr := os.Getenv("FIPS_AGENT_METRICS_ADDR"); addr != "" {
+		a.metrics = newAgentMetrics()
+		a.metrics.serve(ctx, addr)
+	}
+
 	log.Printf("agent %s starting (backend=%s, table=%q)", agentVersion, baseURL, table)
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("agent: %v", err)

@@ -63,18 +63,20 @@ func main() {
 	p.autoSettle = os.Getenv("PORTAL_DEV_AUTOSETTLE") == "1"
 	p.publicURL = strings.TrimRight(getenv("PORTAL_PUBLIC_URL", "http://localhost:8080"), "/")
 
+	m := newAppMetrics(st)
+
 	// Payments (Phase 4): enabled once BTCPay is configured. Without it the
 	// portal falls back to pending purchases (or dev autosettle).
 	var ph *payHandler
 	if pc := newPaymentsClient(); pc != nil {
 		p.pay = pc
-		ph = &payHandler{store: st, secret: []byte(os.Getenv("BTCPAY_WEBHOOK_SECRET"))}
+		ph = &payHandler{store: st, secret: []byte(os.Getenv("BTCPAY_WEBHOOK_SECRET")), metrics: m.webhook}
 		log.Printf("backend: BTCPay payments enabled")
 	}
 
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           routes(h, p, st, adminToken, ph),
+		Handler:           routes(h, p, st, adminToken, ph, m, os.Getenv("METRICS_TOKEN")),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -90,8 +92,14 @@ func main() {
 	}
 }
 
-func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payHandler) http.Handler {
+func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payHandler, m *appMetrics, metricsToken string) http.Handler {
 	mux := http.NewServeMux()
+
+	// Metrics (Prometheus text format). Gated by METRICS_TOKEN if set; otherwise
+	// open — restrict it by network/reverse-proxy in production.
+	if m != nil {
+		mux.HandleFunc("GET /metrics", serveMetrics(m, metricsToken))
+	}
 
 	// Agent API: enroll is unauthenticated (uses the enroll token in-body);
 	// the rest require the node's bearer auth token.

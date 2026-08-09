@@ -59,6 +59,13 @@ func main() {
 	defer stop()
 	go func() { <-ctx.Done(); ln.Close() }()
 
+	// Metrics (Prometheus text format) if an address is configured.
+	var m *captiveMetrics
+	if addr := os.Getenv("CAPTIVE_METRICS_ADDR"); addr != "" {
+		m = newCaptiveMetrics()
+		m.serve(ctx, addr)
+	}
+
 	sem := make(chan struct{}, cfg.maxConns)
 	for {
 		conn, err := ln.Accept()
@@ -71,26 +78,34 @@ func main() {
 		}
 		select {
 		case sem <- struct{}{}:
+			m.conn()
 			go func() {
 				defer func() { <-sem }()
-				handle(conn, cfg)
+				handle(conn, cfg, m)
 			}()
 		default:
+			m.shedConn()
 			conn.Close() // at capacity: shed load rather than queue
 		}
 	}
 }
 
-func handle(conn net.Conn, cfg config) {
+func handle(conn net.Conn, cfg config, m *captiveMetrics) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(cfg.ioTimeout))
 
 	src := sourceAddr(conn)
 	if err := socksAccept(conn); err != nil {
-		return // malformed or non-CONNECT; SOCKS error already sent where relevant
+		m.refuse() // malformed or non-CONNECT; SOCKS error already sent where relevant
+		return
 	}
 	exp := time.Now().Add(tokenTTLSeconds * time.Second).Unix()
-	_, _ = serveRedirect(conn, src, cfg.portalURL, cfg.secret, exp)
+	redirected, _ := serveRedirect(conn, src, cfg.portalURL, cfg.secret, exp)
+	if redirected {
+		m.redirect()
+	} else {
+		m.refuse()
+	}
 	// Whether or not we redirected, we are done: close the connection.
 }
 

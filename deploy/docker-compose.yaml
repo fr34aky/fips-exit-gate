@@ -65,6 +65,7 @@ services:
       CAPTIVE_LISTEN: "[::]:${CAPTIVE_PORT:-1088}"
       CAPTIVE_PORTAL_URL: ${CAPTIVE_PORTAL_URL:?set CAPTIVE_PORTAL_URL}
       CAPTIVE_TOKEN_SECRET: ${CAPTIVE_TOKEN_SECRET:?set CAPTIVE_TOKEN_SECRET}
+      CAPTIVE_METRICS_ADDR: ${CAPTIVE_METRICS_ADDR:-}
 
   # Phase 2: the agent OWNS the nftables authorized set (replaces the static
   # allowlist). Enable with `--profile agent`; do not also seed allowlist.txt.
@@ -86,6 +87,7 @@ services:
       FIPS_AGENT_TABLE: "inet fips_exit"
       FIPS_AGENT_NODE_NAME: ${FIPS_AGENT_NODE_NAME:-exit-01}
       FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE: ${FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE:-0}
+      FIPS_AGENT_METRICS_ADDR: ${FIPS_AGENT_METRICS_ADDR:-}
 
 volumes:
   agent-state:

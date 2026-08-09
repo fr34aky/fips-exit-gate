@@ -1,0 +1,61 @@
+# Prometheus alerting rules for fips-exit. See docs/observability.md.
+groups:
+  - name: fips-exit
+    rules:
+      # A scrape target is unreachable (backend/agent/captive process down).
+      - alert: FipsExitTargetDown
+        expr: up{job=~"fips-exit-.*"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is down"
+
+      # Backend cannot reach Postgres.
+      - alert: FipsExitStoreDown
+        expr: fipsexit_store_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "backend cannot reach the database"
+
+      # An exit node stopped heartbeating (last_seen older than 5 minutes; a
+      # never-seen node reads as 0 and also fires).
+      - alert: FipsExitNodeStale
+        expr: time() - fipsexit_exit_node_last_seen_seconds > 300
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "exit node {{ $labels.node }} has not sent a heartbeat in > 5m"
+
+      # Agent cannot reach the backend — it is failing open (serving the
+      # last-known set) or will fail closed once the grace window passes.
+      - alert: FipsExitAgentBackendUnreachable
+        expr: fipsexit_agent_backend_up == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "agent on {{ $labels.instance }} can't reach the backend (fail-open active)"
+
+      # Authorized users exist but no usage was reported recently — a likely
+      # counter stall or accounting break.
+      - alert: FipsExitUsageStalled
+        expr: increase(fipsexit_agent_usage_reports_sent_total[15m]) == 0 and fipsexit_agent_authorized_addresses > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "agent on {{ $labels.instance }} has authorized users but reported no usage in 15m"
+
+      # Usage is piling up on disk — backend delivery is failing.
+      - alert: FipsExitUsageBuffering
+        expr: fipsexit_agent_usage_reports_buffered > 100
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "agent on {{ $labels.instance }} is buffering usage ({{ $value }} reports)"
+
+      # Payment webhook problems (bad signatures or handler errors).
+      - alert: FipsExitWebhookFailures
+        expr: increase(fipsexit_webhook_events_total{result=~"bad_signature|error"}[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "BTCPay webhook failures: {{ $labels.result }} on {{ $labels.type }}"

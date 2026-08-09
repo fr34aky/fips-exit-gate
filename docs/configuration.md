@@ -42,6 +42,7 @@ Read by `backend/` (see `backend/main.go`).
 | `BTCPAY_STORE_ID` | — | BTCPay store id. |
 | `BTCPAY_WEBHOOK_SECRET` | — | Verifies the BTCPay webhook HMAC (`BTCPay-Sig`). |
 | `BTCPAY_SOCKS5` | — | SOCKS5 proxy (e.g. `127.0.0.1:9050`) to reach a BTCPay `.onion` over Tor. |
+| `METRICS_TOKEN` | — | If set, `GET /metrics` requires this bearer token; else `/metrics` is open (restrict by network). See [Observability](observability.md). |
 
 See the [BTCPay runbook](phase4-btcpay.md) for the required store **Transaction
 Speed** setting (≥ 1 confirmation) that governs on-chain finalization.
@@ -80,6 +81,7 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_STATE_DIR` | `/var/lib/fips-exit-agent` | Durable state (`identity.json` 0600, `runtime.json`). |
 | `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE` | `0` | `1` = revoke all access if the backend is unreachable past the grace window (default is fail-open: keep the last-known set). |
 | `FIPS_AGENT_USAGE_BUFFER_CAP` | `2880` | Max buffered usage reports during an outage (≈ 24 h at 30 s). |
+| `FIPS_AGENT_METRICS_ADDR` | — | If set (e.g. `:9101`), serve Prometheus `/metrics` here. Empty = disabled. |
 
 The agent needs `CAP_NET_ADMIN` (it shells out to `nft`) — the compose service
 grants it; under systemd the unit does.
@@ -111,6 +113,7 @@ Read by `captive/`. Under compose these come from `deploy/.env`/compose.
 | `CAPTIVE_TOKEN_SECRET` | — | HMAC key for the redirect token. **Must equal the backend's value.** |
 | `CAPTIVE_IO_TIMEOUT_S` | (code default) | Per-connection I/O timeout. |
 | `CAPTIVE_MAX_CONNS` | (code default) | Max concurrent connections. |
+| `CAPTIVE_METRICS_ADDR` | — | If set (e.g. `:9102`), serve Prometheus `/metrics` here. Empty = disabled. |
 
 ## Config files
 

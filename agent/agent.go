@@ -41,6 +41,7 @@ type Agent struct {
 	bufferCap            int
 	lastAuthzOK          time.Time
 	nowFn                func() time.Time // injectable for tests
+	metrics              *agentMetrics    // nil when metrics are disabled
 }
 
 func newAgent(st *store, cl backend, fw Firewall, name, enrollToken string, failClosed bool, bufferCap int) *Agent {
@@ -135,11 +136,13 @@ func (a *Agent) runSync(ctx context.Context) {
 			a.markAuthzOK()
 			backoff.reset()
 		case err != nil:
+			a.metrics.syncErr()
 			a.graceCheck()
 			sleep(ctx, backoff.next())
 			continue
 		default:
 			if err := a.applyAuthz(resp); err != nil {
+				a.metrics.nftErr()
 				log.Printf("agent: apply authz: %v", err)
 				sleep(ctx, backoff.next())
 				continue
@@ -178,11 +181,13 @@ func (a *Agent) markAuthzOK() {
 	a.mu.Lock()
 	a.lastAuthzOK = a.now()
 	a.mu.Unlock()
+	a.metrics.syncOK(a.store.snapshotRuntime().AuthzRev, a.now())
 }
 
 // graceCheck optionally fails closed (flushes the authorized set) once the
 // backend has been unreachable longer than the grace window.
 func (a *Agent) graceCheck() {
+	a.metrics.outage()
 	a.mu.Lock()
 	grace := time.Duration(a.cfg.GraceMinutes) * time.Minute
 	over := a.now().Sub(a.lastAuthzOK) > grace
@@ -220,6 +225,7 @@ func (a *Agent) runUsage(ctx context.Context) {
 			log.Printf("agent: collect usage: %v", err)
 		}
 		a.flushBuffer(ctx)
+		a.metrics.setBuffered(len(a.store.snapshotRuntime().BufferedUsage))
 		a.mu.Lock()
 		interval := time.Duration(a.cfg.UsageIntervalS) * time.Second
 		a.mu.Unlock()
@@ -259,6 +265,7 @@ func (a *Agent) collectAndBuffer() error {
 			drop := len(rt.BufferedUsage) - a.bufferCap
 			log.Printf("agent: usage buffer full, dropping %d oldest report(s)", drop)
 			rt.BufferedUsage = rt.BufferedUsage[drop:]
+			a.metrics.usageDrop(drop)
 		}
 	})
 }
@@ -276,6 +283,7 @@ func (a *Agent) flushBuffer(ctx context.Context) {
 		if err != nil {
 			return // keep buffered; retry next tick
 		}
+		a.metrics.usageSentInc()
 		a.applyRevocations(ack.Revoke)
 		if err := a.store.withRuntime(func(rt *runtime) {
 			if len(rt.BufferedUsage) > 0 && rt.BufferedUsage[0].ReportID == report.ReportID {
@@ -322,6 +330,7 @@ func (a *Agent) gcAcct(addrs []netip.Addr) {
 func (a *Agent) runHeartbeat(ctx context.Context) {
 	for ctx.Err() == nil {
 		set, _ := a.fw.ListAuthorized()
+		a.metrics.setAuthorized(len(set))
 		snap := a.store.snapshotRuntime()
 		resp, err := a.client.heartbeat(ctx, heartbeatRequest{
 			Version:  agentVersion,
