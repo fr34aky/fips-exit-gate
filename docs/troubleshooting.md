@@ -109,6 +109,25 @@ ensure you're on the current tree. If you build binaries directly, use Go ≥ 1.
 - **Table missing after reboot:** the gate isn't persistent by default — re-run
   `sudo -E ./up.sh up` (or install the systemd unit).
 
+## Captive redirect loops in a browser (or "denied by proxy")
+
+An unauthorized client browsing a plain-HTTP site through the proxy should be
+302'd to the portal. In a browser it can instead **loop** ("redirects in a way
+that never completes") or fail with "denied by proxy". Causes:
+
+- **The browser proxies the portal address too.** The captive 302 points at the
+  portal (a fips address); if the browser sends *that* through the SOCKS proxy,
+  the exit blocks fd00::/8 → the redirect can't complete (loop, since the request
+  re-enters the captive). **Fix:** route `.fips` / fd00::/8 **direct**. Firefox's
+  "No proxy for" doesn't honor IPv6, so use a PAC:
+  `if (dnsDomainIs(host, ".fips")) return "DIRECT";` and address the portal by its
+  `<npub>.fips` name (see [Configuration](configuration.md#addressing-the-portal-over-fips)).
+- **The source is actually authorized.** Only *unauthorized* sources are sent to
+  the captive; a paid-up client goes straight to the exit (check `/admin/authz`).
+- **The site is HTTPS.** The captive can only redirect plain HTTP; `https://` is
+  cleanly refused (a connection error, never the portal). This is why the portal
+  is reached natively over fips, not via the proxy bounce.
+
 ## DNS doesn't resolve through the proxy
 
 **Cause:** the client is resolving locally and sending an IP literal, or the

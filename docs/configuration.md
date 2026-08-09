@@ -31,7 +31,7 @@ Read by `backend/` (see `backend/main.go`).
 | `SESSION_SECRET` | random | HMAC key for portal session cookies. Set it, or sessions drop on restart. |
 | `CHALLENGE_SECRET` | random | HMAC key for login challenges. Set it in production. |
 | `CAPTIVE_TOKEN_SECRET` | — | Verifies captive redirect tokens. **Must equal the exit node's value.** |
-| `PORTAL_PUBLIC_URL` | `http://localhost:8080` | Public base URL; BTCPay redirects buyers back here after paying. |
+| `PORTAL_PUBLIC_URL` | `http://localhost:8080` | Public base URL; BTCPay redirects buyers back here after paying. Over fips, prefer the portal's `<npub>.fips` URL (see [Addressing the portal](#addressing-the-portal-over-fips)). |
 | `PORTAL_TRUST_FIPS_SOURCE` | `0` | `1` enables transparent fips-source login. Enable **only** on a fips-bound listener with no proxy masking the source (else addresses are spoofable). |
 | `PORTAL_SECURE_COOKIES` | secure | Any value except `0` = `Secure` cookies (HTTPS). Set `0` only for local HTTP testing. |
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
@@ -60,7 +60,7 @@ captive containers.
 | `CAPTIVE_PORT` | `1088` | Captive daemon port (redirect target for unauthorized traffic). |
 | `TOR_PORT` | `1081` | Tor SOCKS port (only with `--profile tor`). |
 | `WORKERS` | `4` | Dante worker processes. |
-| `CAPTIVE_PORTAL_URL` | `http://[<addr>]:8080/captive` | Where the captive `302` sends unauthorized clients. |
+| `CAPTIVE_PORTAL_URL` | `http://<npub>.fips:8080/captive` | Where the captive `302` sends unauthorized clients. Prefer the portal host's `<npub>.fips` URL (see note below). |
 | `CAPTIVE_TOKEN_SECRET` | (secret) | Signs the captive token. **Must equal the backend's value.** |
 
 The same file also carries the agent variables below when the agent runs under
@@ -158,6 +158,27 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" -XPOST $URL/admin/services \
 decremented by `bytes × rate_ppm / 1e6`. **Packages** (volume bundles + time
 passes) are managed via `/admin/packages`; a default catalog is seeded on first
 start. See [Maintenance](maintenance.md#admin-quick-reference).
+
+## Addressing the portal over fips
+
+When the portal is reached over fips (for the captive redirect and transparent
+login), address it by the portal host's **`<npub>.fips`** name — e.g.
+`http://npub1…exit-host-npub….fips:8080/captive`. That name resolves **mesh-wide
+by derivation** (every fips node maps `<npub>.fips` to the derived fd00::/8
+address with no hosts-file entry), and it keeps working if the host's address
+changes. Prefer it for both `CAPTIVE_PORTAL_URL` and `PORTAL_PUBLIC_URL`.
+
+Avoid:
+
+- **Raw IPv6 literals** (`http://[fd..]:8080`) — brittle, and a proxied browser
+  can't reliably bypass them (Firefox's "No proxy for" doesn't honor IPv6).
+- **Local hostname aliases** (`remote.fips`, `home.fips`) — those come from each
+  node's own `/etc/fips/hosts` and mean different things on different nodes.
+
+Client browsers reaching the portal through a SOCKS proxy should route `.fips`
+names **direct** (a PAC returning `DIRECT` for `dnsDomainIs(host, ".fips")`), so
+the portal is fetched natively over fips while Internet traffic goes through the
+exit. See [Troubleshooting](troubleshooting.md#captive-redirect-loops-in-a-browser-or-denied-by-proxy).
 
 ## The portal and the fips firewall
 
