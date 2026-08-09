@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fr34aky/fips-exit-gate/backend/nostr"
+	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
@@ -29,7 +30,9 @@ type portal struct {
 	captiveSecret   []byte
 	trustFipsSource bool
 	secureCookies   bool
-	autoSettle      bool // dev: settle purchases immediately (no payment)
+	autoSettle      bool             // dev: settle purchases immediately (no payment)
+	pay             *payments.Client // nil until BTCPay is configured
+	publicURL       string           // portal base URL for BTCPay checkout redirects
 	tmpl            *template.Template
 }
 
@@ -226,21 +229,50 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	id, err := p.store.CreatePurchase(r.Context(), npub, strings.TrimSpace(r.FormValue("package_id")))
+	ctx := r.Context()
+	packageID := strings.TrimSpace(r.FormValue("package_id"))
+	id, err := p.store.CreatePurchase(ctx, npub, packageID)
 	if err != nil {
 		http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
 		return
 	}
+
+	// Real payment rail: create a BTCPay invoice and send the buyer to checkout.
+	// The webhook grants the entitlement (optimistically on Processing).
+	if p.pay != nil {
+		pkg, err := p.store.GetPackage(ctx, packageID)
+		if err != nil {
+			http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
+			return
+		}
+		inv, err := p.pay.CreateInvoice(ctx, payments.InvoiceRequest{
+			PriceMsat:   pkg.PriceMsat,
+			OrderID:     id,
+			Description: pkg.Name,
+			RedirectURL: p.publicURL + "/dashboard",
+		})
+		if err != nil {
+			http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
+			return
+		}
+		if err := p.store.AttachInvoice(ctx, id, inv.ID, inv.CheckoutLink); err != nil {
+			http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, inv.CheckoutLink, http.StatusSeeOther)
+		return
+	}
+
 	if p.autoSettle {
-		// Dev shortcut: no payment rail yet (Phase 4) — grant immediately.
-		if err := p.store.SettlePurchase(r.Context(), id); err != nil {
+		// Dev shortcut: no payment rail configured — grant immediately.
+		if err := p.store.SettlePurchase(ctx, id); err != nil {
 			http.Error(w, "settle failed", http.StatusInternalServerError)
 			return
 		}
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	// Real payment lands in Phase 4; the purchase is pending until then.
+	// No payment rail and not autosettling: the purchase stays pending.
 	http.Redirect(w, r, "/packages?pending=1", http.StatusSeeOther)
 }
 

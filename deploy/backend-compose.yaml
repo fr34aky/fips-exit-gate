@@ -29,6 +29,20 @@ services:
       DATABASE_URL: postgres://${PGUSER:-fips}:${PGPASSWORD}@db:5432/${PGDATABASE:-fips_exit}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
       LISTEN: ":8080"
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      CHALLENGE_SECRET: ${CHALLENGE_SECRET:-}
+      CAPTIVE_TOKEN_SECRET: ${CAPTIVE_TOKEN_SECRET:-}
+      PORTAL_TRUST_FIPS_SOURCE: ${PORTAL_TRUST_FIPS_SOURCE:-0}
+      PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-1}
+      PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-http://localhost:8080}
+      PORTAL_DEV_AUTOSETTLE: ${PORTAL_DEV_AUTOSETTLE:-0}
+      # Payments (Phase 4). Empty BTCPAY_URL disables the rail.
+      BTCPAY_URL: ${BTCPAY_URL:-}
+      BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
+      BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
+      BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
+      # Reach BTCPay's .onion via the Tor container's SOCKS proxy (see btcpay-compose.yaml).
+      BTCPAY_SOCKS5: ${BTCPAY_SOCKS5:-}
     # Exit nodes reach this API; front it with TLS in production. Bound to
     # localhost here — adjust for your network.
     ports:

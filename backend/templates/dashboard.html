@@ -20,8 +20,21 @@
   <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">inactive</span>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
-{{else}}<div class="card">No packages yet. <a href="/captive">Buy data →</a></div>{{end}}
+{{else}}<div class="card">No packages yet. <a href="/packages">Buy data →</a></div>{{end}}
 <p class="muted">Total used: {{bytes .S.UsageBytes}}</p>
+
+{{if .S.Open}}
+<h2>Pending payments</h2>
+<table><thead><tr><th>Package</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>
+{{range .S.Open}}<tr>
+  <td>{{.PackageName}}</td>
+  <td>{{sats .PriceMsat}}</td>
+  <td>{{if eq .Status "processing"}}<span class="pill on">payment seen</span>{{else}}<span class="pill off">awaiting payment</span>{{end}}</td>
+  <td>{{if .CheckoutURL}}<a href="{{.CheckoutURL}}"><button class="ghost">{{if eq .Status "processing"}}View invoice{{else}}Pay now{{end}}</button></a>{{end}}</td>
+</tr>{{end}}
+</tbody></table>
+<p class="muted">Access unlocks as soon as a payment is detected (before full confirmation).</p>
+{{end}}
 
 <h2>Whitelisted identities</h2>
 <p class="muted">npubs allowed to consume this account's packages.</p>

@@ -1,0 +1,13 @@
+# Tor config for the fips-exit payments stack.
+#
+# 1. SOCKS proxy so NBXplorer/BTCPay (and, optionally, the fips-exit backend)
+#    can reach the external bitcoind/monerod onions and BTCPay's own onion.
+SocksPort 0.0.0.0:9050
+
+# 2. Publish BTCPay as a hidden service. The onion hostname appears at
+#    <tor_data>/hidden_services/btcpay/hostname after first start — set it as
+#    BTCPAY_HOST (btcpay-compose) and BTCPAY_URL=http://<onion> (backend.env),
+#    with BTCPAY_SOCKS5 pointing at this Tor's 9050.
+HiddenServiceDir /var/lib/tor/hidden_services/btcpay
+HiddenServiceVersion 3
+HiddenServicePort 80 btcpayserver:49392

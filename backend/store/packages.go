@@ -10,6 +10,10 @@ import (
 // ErrPackageNotFound is returned for an unknown or inactive package.
 var ErrPackageNotFound = errors.New("store: package not found")
 
+// ErrPurchaseNotFound is returned when no purchase matches (e.g. an unknown
+// BTCPay invoice id in a webhook).
+var ErrPurchaseNotFound = errors.New("store: purchase not found")
+
 // Package is a catalog entry the portal offers for purchase.
 type Package struct {
 	ID           string
@@ -38,6 +42,19 @@ func (s *Store) ListPackages(ctx context.Context) ([]Package, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// GetPackage returns one active catalog entry by id.
+func (s *Store) GetPackage(ctx context.Context, id string) (Package, error) {
+	var p Package
+	err := s.pool.QueryRow(ctx,
+		`SELECT id::text, kind, name, COALESCE(volume_bytes, 0), validity_days, price_msat
+		 FROM package_types WHERE id = $1 AND active`, id).
+		Scan(&p.ID, &p.Kind, &p.Name, &p.VolumeBytes, &p.ValidityDays, &p.PriceMsat)
+	if err == pgx.ErrNoRows {
+		return Package{}, ErrPackageNotFound
+	}
+	return p, err
 }
 
 // CreatePackage adds a catalog entry (admin). volumeBytes is ignored for time.
@@ -73,18 +90,14 @@ func (s *Store) CreatePurchase(ctx context.Context, npub, packageID string) (str
 }
 
 // SettlePurchase marks a purchase settled and grants the entitlement from its
-// package. Idempotent: a second call (e.g. a replayed payment webhook) is a
-// no-op thanks to the status guard and the unique entitlements.purchase_id.
-// This is the seam the Phase-4 BTCPay webhook will call.
+// package. Idempotent: a second call (e.g. an admin re-settle) is a no-op
+// thanks to the status guard and the unique entitlements.purchase_id. Used by
+// the admin/dev path; the BTCPay webhook uses GrantByInvoice/VoidByInvoice.
 func (s *Store) SettlePurchase(ctx context.Context, purchaseID string) error {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		var status, accountID, kind string
-		var volumeBytes *int64
-		var validityDays int
+		var status string
 		err := tx.QueryRow(ctx,
-			`SELECT p.status, p.account_id::text, pt.kind, pt.volume_bytes, pt.validity_days
-			 FROM purchases p JOIN package_types pt ON pt.id = p.package_type_id
-			 WHERE p.id = $1 FOR UPDATE`, purchaseID).Scan(&status, &accountID, &kind, &volumeBytes, &validityDays)
+			`SELECT status FROM purchases WHERE id = $1 FOR UPDATE`, purchaseID).Scan(&status)
 		if err == pgx.ErrNoRows {
 			return ErrPackageNotFound
 		}
@@ -94,25 +107,50 @@ func (s *Store) SettlePurchase(ctx context.Context, purchaseID string) error {
 		if status == "settled" {
 			return nil // idempotent
 		}
-		var vb any
-		if kind == "volume" && volumeBytes != nil {
-			vb = *volumeBytes
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO entitlements(account_id, purchase_id, kind, volume_bytes, expires_at)
-			 VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))
-			 ON CONFLICT (purchase_id) DO NOTHING`,
-			accountID, purchaseID, kind, vb, validityDays); err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx,
-			`UPDATE purchases SET status = 'settled', settled_at = now() WHERE id = $1`, purchaseID)
-		return err
+		return grantEntitlementTx(ctx, tx, purchaseID, "settled")
 	})
 	if err != nil {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)
+	return err
+}
+
+// grantEntitlementTx inserts the purchase's entitlement (idempotent via the
+// unique entitlements.purchase_id) and sets the purchase status. settled_at is
+// stamped only when moving to 'settled', and never cleared afterwards.
+func grantEntitlementTx(ctx context.Context, tx pgx.Tx, purchaseID, status string) error {
+	var accountID, kind string
+	var volumeBytes *int64
+	var validityDays int
+	err := tx.QueryRow(ctx,
+		`SELECT p.account_id::text, pt.kind, pt.volume_bytes, pt.validity_days
+		 FROM purchases p JOIN package_types pt ON pt.id = p.package_type_id
+		 WHERE p.id = $1 FOR UPDATE`, purchaseID).Scan(&accountID, &kind, &volumeBytes, &validityDays)
+	if err == pgx.ErrNoRows {
+		return ErrPurchaseNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var vb any
+	if kind == "volume" && volumeBytes != nil {
+		vb = *volumeBytes
+	}
+	// Expiry counts from first grant (Processing), not from a later Settled, so
+	// the buyer isn't shortchanged if confirmation lands days later.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO entitlements(account_id, purchase_id, kind, volume_bytes, expires_at)
+		 VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))
+		 ON CONFLICT (purchase_id) DO NOTHING`,
+		accountID, purchaseID, kind, vb, validityDays); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`UPDATE purchases
+		 SET status = $2,
+		     settled_at = CASE WHEN $2 = 'settled' AND settled_at IS NULL THEN now() ELSE settled_at END
+		 WHERE id = $1`, purchaseID, status)
 	return err
 }
 

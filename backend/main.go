@@ -61,9 +61,20 @@ func main() {
 		log.Fatalf("backend: portal: %v", err)
 	}
 	p.autoSettle = os.Getenv("PORTAL_DEV_AUTOSETTLE") == "1"
+	p.publicURL = strings.TrimRight(getenv("PORTAL_PUBLIC_URL", "http://localhost:8080"), "/")
+
+	// Payments (Phase 4): enabled once BTCPay is configured. Without it the
+	// portal falls back to pending purchases (or dev autosettle).
+	var ph *payHandler
+	if pc := newPaymentsClient(); pc != nil {
+		p.pay = pc
+		ph = &payHandler{store: st, secret: []byte(os.Getenv("BTCPAY_WEBHOOK_SECRET"))}
+		log.Printf("backend: BTCPay payments enabled")
+	}
+
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           routes(h, p, st, adminToken),
+		Handler:           routes(h, p, st, adminToken, ph),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -79,7 +90,7 @@ func main() {
 	}
 }
 
-func routes(h *handlers, p *portal, st *store.Store, adminToken string) http.Handler {
+func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	// Agent API: enroll is unauthenticated (uses the enroll token in-body);
@@ -98,6 +109,11 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string) http.Han
 	mux.Handle("GET /admin/packages", requireAdmin(adminToken, h.adminListPackages))
 	mux.Handle("POST /admin/packages", requireAdmin(adminToken, h.adminCreatePackage))
 	mux.Handle("POST /admin/settle", requireAdmin(adminToken, h.adminSettle))
+
+	// BTCPay webhook (HMAC-verified in the handler, so no bearer middleware).
+	if ph != nil {
+		mux.HandleFunc("POST /payments/btcpay/webhook", ph.webhook)
+	}
 
 	// User portal (login, dashboard, whitelist, captive landing).
 	p.routes(mux)

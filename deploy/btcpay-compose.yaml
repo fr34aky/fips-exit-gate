@@ -1,0 +1,82 @@
+# fips-exit payments stack (Phase 4): a self-hosted BTCPay Server wired to your
+# EXTERNAL bitcoind (and monerod, via the Monero plugin) over Tor.
+#
+# This is a compact, opinionated starting point. For a production deployment the
+# officially supported path is btcpayserver-docker
+# (https://github.com/btcpayserver/btcpayserver-docker) — this file mirrors its
+# core services so you can run a lean stack and understand the moving parts. See
+# docs/phase4-btcpay.md for the full runbook (external nodes over Tor, store +
+# API key + webhook setup, and the Monero plugin).
+#
+# Copy backend/deploy secrets into btcpay.env (chmod 600) before `up`.
+services:
+  # Tor: outbound to your external bitcoind/monerod onions, and it publishes
+  # BTCPay as a hidden service so the fips-exit backend can reach it privately.
+  tor:
+    image: docker.io/btcpayserver/tor:0.4.8.10
+    restart: unless-stopped
+    volumes:
+      - tor_data:/var/lib/tor
+      - tor_torrc:/usr/local/etc/tor
+      - ./tor/torrc:/usr/local/etc/tor/torrc:ro
+    # Exposes SOCKS on 9050 (for reaching external node onions) and, via torrc,
+    # a HiddenService forwarding to the btcpayserver container.
+
+  nbxplorer:
+    image: docker.io/nicolasdorier/nbxplorer:latest
+    restart: unless-stopped
+    depends_on: [db, tor]
+    environment:
+      NBXPLORER_POSTGRES: "Host=db;Port=5432;Database=nbxplorer;Username=${PG_USER:-btcpay};Password=${PG_PASSWORD:?set PG_PASSWORD}"
+      NBXPLORER_NETWORK: ${BTC_NETWORK:-mainnet}
+      NBXPLORER_CHAINS: "btc"
+      NBXPLORER_BTCRPCURL: ${BTC_RPC_URL:?set BTC_RPC_URL (e.g. http://bitcoind-onion.onion:8332)}
+      NBXPLORER_BTCRPCUSER: ${BTC_RPC_USER:-}
+      NBXPLORER_BTCRPCPASSWORD: ${BTC_RPC_PASSWORD:-}
+      # Reach the external full node's P2P/RPC onions through Tor.
+      NBXPLORER_BTCNODEENDPOINT: ${BTC_P2P_ENDPOINT:?set BTC_P2P_ENDPOINT (e.g. bitcoind-onion.onion:8333)}
+      NBXPLORER_SOCKSENDPOINT: tor:9050
+      NBXPLORER_BIND: "0.0.0.0:32838"
+    volumes:
+      - nbx_data:/datadir
+
+  btcpayserver:
+    image: docker.io/btcpayserver/btcpayserver:latest
+    restart: unless-stopped
+    depends_on: [db, nbxplorer, tor]
+    environment:
+      BTCPAY_POSTGRES: "Host=db;Port=5432;Database=btcpay;Username=${PG_USER:-btcpay};Password=${PG_PASSWORD}"
+      BTCPAY_NETWORK: ${BTC_NETWORK:-mainnet}
+      BTCPAY_BIND: "0.0.0.0:49392"
+      BTCPAY_ROOTPATH: /
+      BTCPAY_CHAINS: "btc"
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      BTCPAY_SOCKSENDPOINT: tor:9050
+      # Set to your published onion once torrc HiddenService is up (see runbook).
+      BTCPAY_HOST: ${BTCPAY_HOST:-}
+    volumes:
+      - btcpay_data:/datadir
+      - btcpay_plugins:/root/.btcpayserver/Plugins
+    # Not published on a public port by design — reach it via the Tor hidden
+    # service (production) or map a localhost port for first-run setup:
+    ports:
+      - "127.0.0.1:49392:49392"
+
+  db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-btcpay}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: btcpay,nbxplorer
+    volumes:
+      - btcpay_pg:/var/lib/postgresql/data
+      - ./btcpay/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
+
+volumes:
+  tor_data:
+  tor_torrc:
+  nbx_data:
+  btcpay_data:
+  btcpay_plugins:
+  btcpay_pg:

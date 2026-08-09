@@ -40,6 +40,7 @@ type AccountSummary struct {
 	Account      Account
 	Entitlements []EntitlementView
 	Whitelist    []WhitelistView
+	Open         []PurchaseView // pending/processing purchases awaiting payment
 	UsageBytes   int64
 }
 
@@ -112,5 +113,11 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 		Scan(&out.UsageBytes); err != nil {
 		return out, err
 	}
+
+	open, err := s.OpenPurchases(ctx, npub)
+	if err != nil {
+		return out, err
+	}
+	out.Open = open
 	return out, nil
 }
