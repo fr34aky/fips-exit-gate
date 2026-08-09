@@ -1,6 +1,10 @@
 # fips-exit backend host (separate from the exit nodes): Postgres + control plane.
 # Copy backend.env.example to backend.env and fill in secrets.
 
+# Explicit project name so the backend stack is isolated from the exit stack
+# (docker-compose.yaml) when both run from this directory.
+name: fips-exit-backend
+
 # Bounded log retention. See docs/hardening.md#logging--privacy.
 x-logging: &default-logging
   driver: json-file

@@ -5,6 +5,12 @@
 # host networking. Load the nftables ruleset on the host FIRST (see up.sh),
 # then start this stack.
 
+# Explicit project name so this exit stack is isolated from the backend stack
+# (backend-compose.yaml) when both run from this directory — otherwise they share
+# the default "deploy" project and each reports the other's containers as orphans
+# (and `--remove-orphans` would delete the wrong stack).
+name: fips-exit
+
 # Bounded log retention (privacy): Dante logs errors only — no successful
 # connection/destination logging — but cap retention anyway. See docs/hardening.md.
 x-logging: &default-logging
