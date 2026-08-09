@@ -93,3 +93,7 @@ gofmt -l . && go vet ./... && go test ./...
 Store integration tests run only when `TEST_DATABASE_URL` is set (use a
 throwaway database, never a live one — the tests reset the schema) and require
 `-p 1`. See [Configuration](docs/configuration.md#tests-and-development).
+
+## License
+
+[MIT](LICENSE) © fr34aky
