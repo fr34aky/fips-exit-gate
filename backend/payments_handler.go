@@ -39,9 +39,12 @@ func (ph *payHandler) webhook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch ev.Type {
 	case payments.EventInvoiceProcessing:
-		err = ph.store.GrantByInvoice(ctx, ev.InvoiceID, false)
+		// Payment seen but not final (on-chain 0-conf, unconfirmed XMR). Record
+		// it for the dashboard but grant NO access until it settles.
+		err = ph.store.MarkProcessing(ctx, ev.InvoiceID)
 	case payments.EventInvoiceSettled:
-		err = ph.store.GrantByInvoice(ctx, ev.InvoiceID, true)
+		// Payment final per the store's confirmation policy — unlock access.
+		err = ph.store.GrantByInvoice(ctx, ev.InvoiceID)
 	case payments.EventInvoiceInvalid:
 		err = ph.store.VoidByInvoice(ctx, ev.InvoiceID, "invalid")
 	case payments.EventInvoiceExpired:

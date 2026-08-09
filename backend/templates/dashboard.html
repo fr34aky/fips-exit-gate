@@ -42,11 +42,11 @@
 {{range .S.Open}}<tr>
   <td>{{.PackageName}}</td>
   <td>{{sats .PriceMsat}}</td>
-  <td>{{if eq .Status "processing"}}<span class="pill on">payment seen</span>{{else}}<span class="pill off">awaiting payment</span>{{end}}</td>
+  <td>{{if eq .Status "processing"}}<span class="pill">confirming…</span>{{else}}<span class="pill off">awaiting payment</span>{{end}}</td>
   <td>{{if .CheckoutURL}}<a href="{{.CheckoutURL}}"><button class="ghost">{{if eq .Status "processing"}}View invoice{{else}}Pay now{{end}}</button></a>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
-<p class="muted">Access unlocks as soon as a payment is detected (before full confirmation).</p>
+<p class="muted">Access unlocks once payment is confirmed — a block confirmation for on-chain Bitcoin, instantly for Lightning.</p>
 {{end}}
 
 <h2>Whitelisted identities</h2>

@@ -68,17 +68,21 @@ func TestWebhookDrivesAuthz(t *testing.T) {
 		t.Fatal("authorized by a tampered webhook")
 	}
 
-	// Valid Processing optimistically authorizes.
+	// Valid Processing records the payment as SEEN but must NOT authorize — an
+	// on-chain 0-conf payment is reversible, so access waits for settlement.
 	if code := postWebhook(t, srv.URL, secret, payments.EventInvoiceProcessing, "inv_wh", false); code != http.StatusOK {
 		t.Fatalf("processing webhook status = %d, want 200", code)
 	}
-	if full, _, _ := st.FullSet(ctx); !hasAddr(full, addr) {
-		t.Fatal("not authorized after valid Processing webhook")
+	if full, _, _ := st.FullSet(ctx); hasAddr(full, addr) {
+		t.Fatal("authorized on unconfirmed Processing webhook (must wait for settle)")
 	}
 
-	// Settled confirms.
+	// Settled -> payment final -> access granted.
 	if code := postWebhook(t, srv.URL, secret, payments.EventInvoiceSettled, "inv_wh", false); code != http.StatusOK {
 		t.Fatalf("settled webhook status = %d, want 200", code)
+	}
+	if full, _, _ := st.FullSet(ctx); !hasAddr(full, addr) {
+		t.Fatal("not authorized after Settled webhook")
 	}
 
 	// An unknown invoice is acked (200), not errored.

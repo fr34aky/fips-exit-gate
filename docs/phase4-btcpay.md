@@ -18,26 +18,46 @@ backend ◀──── signed webhook (BTCPay-Sig HMAC) ──── BTCPay
   package's sats price (`btcAmount` in `backend/payments/btcpay.go`). BTCPay
   offers BTC on-chain, Lightning, and Monero as payment methods and converts the
   XMR amount with its configured rate provider — no per-rail pricing to maintain.
-- **Optimistic unlock.** Access is granted when a payment is *seen*
-  (`InvoiceProcessing`), before full confirmation, then confirmed on
-  `InvoiceSettled`. If the invoice later goes `InvoiceInvalid`/`InvoiceExpired`
-  the entitlement is revoked. This trades a small reorg window for a snappy UX
-  (an explicit choice — see the threat model note below).
+- **Grant only on settlement (payment finalized).** Access is granted on
+  `InvoiceSettled` — i.e. after the payment is final per the store's confirmation
+  policy: **≥ 1 block for on-chain Bitcoin**, immediate for Lightning (no
+  confirmations exist), and the plugin's confirmations for Monero.
+  `InvoiceProcessing` (payment *seen* — e.g. an on-chain tx still at 0-conf in the
+  mempool) only updates the purchase to a "confirming…" status; it grants **no**
+  access. This avoids unlocking on a reversible 0-conf transaction that could be
+  double-spent or dropped (and then revoked ~an hour later when the invoice goes
+  invalid). Lightning users still unlock instantly because LN invoices settle
+  immediately.
 - **The webhook is the only crediting path.** `store.GrantByInvoice` /
   `store.VoidByInvoice` are idempotent and safe against replayed / out-of-order
   deliveries; an already-`settled` purchase is never downgraded or voided.
 
 ## Webhook → store mapping
 
-| BTCPay event        | Backend action                     | Purchase status |
-|---------------------|------------------------------------|-----------------|
-| `InvoiceProcessing` | `GrantByInvoice(confirmed=false)`  | `processing`    |
-| `InvoiceSettled`    | `GrantByInvoice(confirmed=true)`   | `settled`       |
-| `InvoiceExpired`    | `VoidByInvoice("expired")`         | `expired`       |
-| `InvoiceInvalid`    | `VoidByInvoice("invalid")`         | `invalid`       |
+| BTCPay event        | Backend action              | Purchase status | Grants access? |
+|---------------------|-----------------------------|-----------------|----------------|
+| `InvoiceProcessing` | `MarkProcessing`            | `processing`    | **no** (seen, not final) |
+| `InvoiceSettled`    | `GrantByInvoice`            | `settled`       | **yes** (final) |
+| `InvoiceExpired`    | `VoidByInvoice("expired")`  | `expired`       | no (revokes if any) |
+| `InvoiceInvalid`    | `VoidByInvoice("invalid")`  | `invalid`       | no (revokes if any) |
 
 Other events are acked (2xx) and ignored. Unknown invoices are also acked so
 BTCPay stops retrying.
+
+### On-chain finalization (required BTCPay store setting)
+
+Because access is granted on `InvoiceSettled`, the confirmation threshold is
+whatever makes BTCPay fire that event — the store's **Transaction Speed** /
+invoice-confirmation setting. Configure it so on-chain requires **at least one
+confirmation**:
+
+> Store → Settings → **General / Invoice** → **Transaction Speed** →
+> **`Medium` (1 confirmation)** — or slower (`Low Medium` = 2, `Low` = 6) for
+> larger amounts.
+
+Do **not** use `High` (0-confirmation): that would settle on-chain invoices at
+0-conf, defeating the finalization guarantee. Lightning is unaffected (final on
+receipt); Monero settles per the Monero plugin's confirmation setting.
 
 ## Backend configuration
 
@@ -105,17 +125,19 @@ go run ./backend &
 go run ./cmd/fake-btcpay -listen :9000 -base http://localhost:9000 \
   -webhook-url http://localhost:8080/payments/btcpay/webhook -secret whsec &
 
-# 3. Log in, buy a package (redirects to the fake checkout), then click
-#    "Payment detected" → the buyer's address is authorized within a poll; click
-#    "Confirmed" to settle. Or drive it headless:
-curl -X POST http://localhost:9000/sim/<invoice-id>/InvoiceProcessing
+# 3. Log in, buy a package (redirects to the fake checkout). Click
+#    "Payment detected" → status goes to "confirming…" but NO access yet; click
+#    "Confirmed (Settled)" → access is granted. Or drive it headless:
+curl -X POST http://localhost:9000/sim/<invoice-id>/InvoiceProcessing   # confirming, no access
+curl -X POST http://localhost:9000/sim/<invoice-id>/InvoiceSettled      # finalized -> access
 ```
 
 ## Threat model note
 
-Optimistic crediting means an on-chain payment that is seen but later reorged
-away (or a Lightning HTLC that fails after `Processing`) can grant a brief window
-of access before `Invalid` revokes it. This is bounded by usage in that window
-and was accepted for UX. To harden, switch the `InvoiceProcessing` case to a
-no-op and grant only on `InvoiceSettled` (one-line change in
-`backend/payments_handler.go`); on-chain buyers then wait for confirmations.
+Access is granted only on `InvoiceSettled`, so an on-chain payment that is seen
+but later reorged away or dropped never grants access — the buyer stays in
+"confirming…" until the payment reaches the store's confirmation threshold
+(≥ 1 block; see *On-chain finalization* above). Lightning is final on receipt and
+unaffected. The residual risk is a **reorg deeper than the configured
+confirmation count**; raise Transaction Speed (2–6 confirmations) for
+higher-value packages if that matters for your threat model.

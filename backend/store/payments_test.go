@@ -48,41 +48,43 @@ func entCount(t *testing.T, st *Store, pid string) int {
 	return n
 }
 
-// Optimistic grant on Processing, then confirm on Settled.
-func TestGrantByInvoiceProcessingThenSettled(t *testing.T) {
+// Processing (payment SEEN, e.g. 0-conf on-chain) must NOT grant access; only
+// Settled (payment final) does. This is the on-chain-finalization guarantee.
+func TestProcessingDoesNotGrantSettledDoes(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	pid, inv := buyPackage(t, st, npubA, "inv_1")
 	addrA := addrOf(t, npubA)
 
 	// Not authorized while pending.
-	full, _, _ := st.FullSet(ctx)
-	if setContains(full, addrA) {
+	if full, _, _ := st.FullSet(ctx); setContains(full, addrA) {
 		t.Fatal("authorized before any payment")
 	}
 
-	// Processing -> optimistic grant, status 'processing'.
-	if err := st.GrantByInvoice(ctx, inv, false); err != nil {
+	// Processing -> status 'processing' but NO grant, NO authorization.
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
-	}
-	full, _, _ = st.FullSet(ctx)
-	if !setContains(full, addrA) {
-		t.Fatal("not authorized after Processing (optimistic grant failed)")
 	}
 	if s := purchaseStatus(t, st, pid); s != "processing" {
 		t.Fatalf("status after Processing = %q, want processing", s)
 	}
+	if n := entCount(t, st, pid); n != 0 {
+		t.Fatalf("entitlements after Processing = %d, want 0 (no grant on 0-conf)", n)
+	}
+	if full, _, _ := st.FullSet(ctx); setContains(full, addrA) {
+		t.Fatal("authorized on unconfirmed payment (Processing must not grant)")
+	}
 
-	// A duplicate Processing is a no-op (still one entitlement).
-	if err := st.GrantByInvoice(ctx, inv, false); err != nil {
+	// A duplicate Processing is a no-op.
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	if n := entCount(t, st, pid); n != 1 {
-		t.Fatalf("entitlements after duplicate Processing = %d, want 1", n)
+	if s := purchaseStatus(t, st, pid); s != "processing" {
+		t.Fatalf("status after duplicate Processing = %q", s)
 	}
 
-	// Settled -> confirm, status 'settled', still one entitlement, still authorized.
-	if err := st.GrantByInvoice(ctx, inv, true); err != nil {
+	// Settled -> grant, status 'settled', authorized, exactly one entitlement.
+	if err := st.GrantByInvoice(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if s := purchaseStatus(t, st, pid); s != "settled" {
@@ -91,53 +93,48 @@ func TestGrantByInvoiceProcessingThenSettled(t *testing.T) {
 	if n := entCount(t, st, pid); n != 1 {
 		t.Fatalf("entitlements after Settled = %d, want 1", n)
 	}
-	full, _, _ = st.FullSet(ctx)
-	if !setContains(full, addrA) {
+	if full, _, _ := st.FullSet(ctx); !setContains(full, addrA) {
 		t.Fatal("not authorized after Settled")
 	}
 
-	// A late Processing after Settled must NOT downgrade the status.
-	if err := st.GrantByInvoice(ctx, inv, false); err != nil {
+	// A late Processing after Settled must NOT downgrade or revoke.
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if s := purchaseStatus(t, st, pid); s != "settled" {
 		t.Fatalf("status downgraded to %q by late Processing", s)
 	}
+	if full, _, _ := st.FullSet(ctx); !setContains(full, addrA) {
+		t.Fatal("access lost after late Processing")
+	}
 }
 
-// Straight-to-Settled (e.g. a fast Lightning payment) grants without Processing.
+// Settled directly (e.g. a Lightning payment, which is final immediately) grants
+// without a prior Processing.
 func TestGrantByInvoiceSettledDirect(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	pid, inv := buyPackage(t, st, npubA, "inv_2")
-	if err := st.GrantByInvoice(ctx, inv, true); err != nil {
+	if err := st.GrantByInvoice(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if s := purchaseStatus(t, st, pid); s != "settled" {
 		t.Fatalf("status = %q, want settled", s)
 	}
-	full, _, _ := st.FullSet(ctx)
-	if !setContains(full, addrOf(t, npubA)) {
+	if full, _, _ := st.FullSet(ctx); !setContains(full, addrOf(t, npubA)) {
 		t.Fatal("not authorized after direct Settled")
 	}
 }
 
-// Invalid/Expired revokes an optimistic (processing) grant.
-func TestVoidByInvoiceRevokes(t *testing.T) {
+// Invalid/Expired on an unconfirmed purchase marks it voided and grants nothing
+// (there was never a grant to revoke — access is withheld until settlement).
+func TestVoidByInvoiceOnProcessing(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	pid, inv := buyPackage(t, st, npubA, "inv_3")
-	addrA := addrOf(t, npubA)
-
-	if err := st.GrantByInvoice(ctx, inv, false); err != nil {
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	full, _, _ := st.FullSet(ctx)
-	if !setContains(full, addrA) {
-		t.Fatal("not authorized after Processing")
-	}
-
-	// Invalid -> entitlement removed, address revoked, status 'invalid'.
 	if err := st.VoidByInvoice(ctx, inv, "invalid"); err != nil {
 		t.Fatal(err)
 	}
@@ -145,20 +142,19 @@ func TestVoidByInvoiceRevokes(t *testing.T) {
 		t.Fatalf("status = %q, want invalid", s)
 	}
 	if n := entCount(t, st, pid); n != 0 {
-		t.Fatalf("entitlements after void = %d, want 0", n)
+		t.Fatalf("entitlements = %d, want 0", n)
 	}
-	full, _, _ = st.FullSet(ctx)
-	if setContains(full, addrA) {
-		t.Fatal("still authorized after void")
+	if full, _, _ := st.FullSet(ctx); setContains(full, addrOf(t, npubA)) {
+		t.Fatal("authorized after void")
 	}
 }
 
-// A void must never revoke an already-settled purchase.
+// A void must never revoke an already-settled (confirmed) purchase.
 func TestVoidByInvoiceIgnoresSettled(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	pid, inv := buyPackage(t, st, npubA, "inv_4")
-	if err := st.GrantByInvoice(ctx, inv, true); err != nil {
+	if err := st.GrantByInvoice(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.VoidByInvoice(ctx, inv, "invalid"); err != nil {
@@ -172,18 +168,18 @@ func TestVoidByInvoiceIgnoresSettled(t *testing.T) {
 	}
 }
 
-// A Settled after an Invalid re-grants (payment ultimately cleared).
+// A Settled after an Invalid re-grants (the payment ultimately confirmed).
 func TestGrantByInvoiceSettledAfterInvalid(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	pid, inv := buyPackage(t, st, npubA, "inv_5")
-	if err := st.GrantByInvoice(ctx, inv, false); err != nil {
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.VoidByInvoice(ctx, inv, "invalid"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.GrantByInvoice(ctx, inv, true); err != nil {
+	if err := st.GrantByInvoice(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if s := purchaseStatus(t, st, pid); s != "settled" {
@@ -194,11 +190,14 @@ func TestGrantByInvoiceSettledAfterInvalid(t *testing.T) {
 	}
 }
 
-// Unknown invoices are reported as not-found (webhook acks them without error).
+// Unknown invoices are reported as not-found (the webhook acks them anyway).
 func TestGrantVoidUnknownInvoice(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	if err := st.GrantByInvoice(ctx, "nope", true); err != ErrPurchaseNotFound {
+	if err := st.MarkProcessing(ctx, "nope"); err != ErrPurchaseNotFound {
+		t.Fatalf("processing unknown: want ErrPurchaseNotFound, got %v", err)
+	}
+	if err := st.GrantByInvoice(ctx, "nope"); err != ErrPurchaseNotFound {
 		t.Fatalf("grant unknown: want ErrPurchaseNotFound, got %v", err)
 	}
 	if err := st.VoidByInvoice(ctx, "nope", "invalid"); err != ErrPurchaseNotFound {
@@ -219,11 +218,18 @@ func TestOpenPurchases(t *testing.T) {
 	if len(open) != 1 || open[0].Status != "pending" || open[0].CheckoutURL == "" {
 		t.Fatalf("open pending = %+v", open)
 	}
-	if err := st.GrantByInvoice(ctx, inv, true); err != nil {
+	// A processing (confirming) purchase is still open.
+	if err := st.MarkProcessing(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	open, _ = st.OpenPurchases(ctx, npubA)
-	if len(open) != 0 {
+	if open, _ = st.OpenPurchases(ctx, npubA); len(open) != 1 || open[0].Status != "processing" {
+		t.Fatalf("open processing = %+v", open)
+	}
+	// Settled drops out of the open list.
+	if err := st.GrantByInvoice(ctx, inv); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ = st.OpenPurchases(ctx, npubA); len(open) != 0 {
 		t.Fatalf("settled purchase still open: %+v", open)
 	}
 }

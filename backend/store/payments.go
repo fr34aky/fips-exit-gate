@@ -22,17 +22,45 @@ func (s *Store) AttachInvoice(ctx context.Context, purchaseID, invoiceID, checko
 	return nil
 }
 
-// GrantByInvoice grants (or confirms) the entitlement for the purchase tied to
-// invoiceID. confirmed=false is the optimistic grant on InvoiceProcessing
-// (status 'processing'); confirmed=true confirms it on InvoiceSettled (status
-// 'settled'). Idempotent and safe against out-of-order/replayed webhooks:
+// MarkProcessing records that a payment for invoiceID has been SEEN but is not
+// yet final (BTCPay InvoiceProcessing) — e.g. an on-chain tx in the mempool at
+// 0-conf, or an unconfirmed Monero payment. It updates the purchase status for
+// the dashboard ("confirming…") but grants NO access: access is withheld until
+// the payment is finalized (see GrantByInvoice). This avoids granting on a
+// reversible 0-conf transaction. Idempotent; only advances pending -> processing
+// (never downgrades a settled purchase, never revives a voided one).
+func (s *Store) MarkProcessing(ctx context.Context, invoiceID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE purchases SET status = 'processing'
+		 WHERE btcpay_invoice_id = $1 AND status = 'pending'`, invoiceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Either unknown invoice, or already past 'pending' (settled/processing/
+		// voided). Distinguish unknown so the webhook can ack-and-ignore it.
+		var exists bool
+		if err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM purchases WHERE btcpay_invoice_id = $1)`, invoiceID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrPurchaseNotFound
+		}
+	}
+	return nil
+}
+
+// GrantByInvoice grants the entitlement for the purchase tied to invoiceID and
+// marks it 'settled'. It is called ONLY on BTCPay InvoiceSettled — i.e. after
+// the payment is final per the store's confirmation policy (>= 1 block for
+// on-chain BTC; immediate for Lightning; the plugin's confirmations for Monero).
+// This is what actually unlocks access. Idempotent and safe against
+// replayed/out-of-order webhooks:
 //
-//   - already 'settled'                  -> no-op (won't downgrade)
-//   - 'processing' + another Processing  -> no-op
-//   - 'invalid'/'expired' + Settled      -> re-grants (payment ultimately cleared)
-//
-// It is the exact seam the Phase-4 BTCPay webhook calls.
-func (s *Store) GrantByInvoice(ctx context.Context, invoiceID string, confirmed bool) error {
+//   - already 'settled'         -> no-op (won't double-grant)
+//   - 'invalid'/'expired' + Settled -> re-grants (payment ultimately cleared)
+func (s *Store) GrantByInvoice(ctx context.Context, invoiceID string) error {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var purchaseID, status string
 		err := tx.QueryRow(ctx,
@@ -45,16 +73,9 @@ func (s *Store) GrantByInvoice(ctx context.Context, invoiceID string, confirmed 
 			return err
 		}
 		if status == "settled" {
-			return nil // terminal — never downgrade a confirmed purchase
+			return nil // terminal — already granted
 		}
-		if status == "processing" && !confirmed {
-			return nil // already optimistically granted
-		}
-		newStatus := "processing"
-		if confirmed {
-			newStatus = "settled"
-		}
-		return grantEntitlementTx(ctx, tx, purchaseID, newStatus)
+		return grantEntitlementTx(ctx, tx, purchaseID, "settled")
 	})
 	if err != nil {
 		return err
