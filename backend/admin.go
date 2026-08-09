@@ -149,6 +149,51 @@ func (h *handlers) adminSettle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "settled"})
 }
 
+func (h *handlers) adminListServices(w http.ResponseWriter, r *http.Request) {
+	svcs, err := h.store.Services(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(svcs))
+	for _, s := range svcs {
+		out = append(out, map[string]any{"key": s.Key, "port": s.Port, "rate_ppm": s.Rate})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"services": out})
+}
+
+// adminCreateService registers an egress service in the catalog (upsert on key).
+// Adding a service (e.g. Tor) is a catalog row here + its SOCKS endpoint on the
+// port + the rendered gate; no gating/agent/portal code changes.
+func (h *handlers) adminCreateService(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Key     string `json:"key"`
+		Name    string `json:"name"`
+		Port    uint16 `json:"port"`
+		RatePPM int64  `json:"rate_ppm"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Key == "" || req.Port == 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "key and port are required")
+		return
+	}
+	if req.Name == "" {
+		req.Name = req.Key
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	if err := h.store.CreateService(r.Context(), req.Key, req.Name, req.Port, req.RatePPM, enabled); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *handlers) adminAuthz(w http.ResponseWriter, r *http.Request) {
 	members, rev, err := h.store.FullSet(r.Context())
 	if err != nil {

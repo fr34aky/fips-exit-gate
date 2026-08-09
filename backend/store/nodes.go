@@ -113,3 +113,24 @@ func (s *Store) SeedDefaults(ctx context.Context) error {
 	}
 	return nil
 }
+
+// CreateService registers (or updates) an egress service in the catalog. This
+// is the ONLY control-plane change needed to add a new egress layer (e.g. Tor):
+// the gate, captive daemon, agent, and billing are all service-agnostic and
+// pick it up from here + the rendered nftables ports. Upserts on key.
+func (s *Store) CreateService(ctx context.Context, key, name string, port uint16, ratePPM int64, enabled bool) error {
+	if ratePPM <= 0 {
+		ratePPM = 1_000_000
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO services(key, name, port, rate_ppm, enabled)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (key) DO UPDATE
+		   SET name = EXCLUDED.name, port = EXCLUDED.port,
+		       rate_ppm = EXCLUDED.rate_ppm, enabled = EXCLUDED.enabled`,
+		key, name, int(port), ratePPM, enabled)
+	if err != nil {
+		return fmt.Errorf("store: create service: %w", err)
+	}
+	return nil
+}

@@ -23,6 +23,19 @@
 {{else}}<div class="card">No packages yet. <a href="/packages">Buy data →</a></div>{{end}}
 <p class="muted">Total used: {{bytes .S.UsageBytes}}</p>
 
+{{if .S.Services}}
+<h2>Usage by service</h2>
+<p class="muted">One shared balance, metered per service at its rate.</p>
+<table><thead><tr><th>Service</th><th>Rate</th><th>Traffic</th><th>Billed</th></tr></thead><tbody>
+{{range .S.Services}}<tr>
+  <td>{{.Name}}</td>
+  <td>{{rate .RatePPM}}</td>
+  <td>{{bytes .Metered}}</td>
+  <td>{{bytes .Billed}}</td>
+</tr>{{end}}
+</tbody></table>
+{{end}}
+
 {{if .S.Open}}
 <h2>Pending payments</h2>
 <table><thead><tr><th>Package</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>

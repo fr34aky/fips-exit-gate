@@ -41,7 +41,48 @@ type AccountSummary struct {
 	Entitlements []EntitlementView
 	Whitelist    []WhitelistView
 	Open         []PurchaseView // pending/processing purchases awaiting payment
+	Services     []ServiceUsage // per-service consumption (shared balance, per-service rates)
 	UsageBytes   int64
+}
+
+// ServiceUsage is an account's consumption on one egress service. Metered is the
+// raw bytes; Billed is the rate-weighted amount actually drawn from the shared
+// balance (bytes * rate_ppm / 1e6) — so a 1.5x service bills 1.5x its bytes.
+type ServiceUsage struct {
+	Key     string
+	Name    string
+	RatePPM int64
+	Metered int64
+	Billed  int64
+}
+
+// UsageByService returns per-service consumption for an account across all
+// enabled services (0 for services with no usage yet), so the dashboard can
+// show one balance draining at each service's rate.
+func (s *Store) UsageByService(ctx context.Context, accountID string) ([]ServiceUsage, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT sv.key, sv.name, sv.rate_ppm,
+		        COALESCE(sum(us.bytes), 0) AS metered,
+		        COALESCE(sum(us.bytes * sv.rate_ppm / 1000000), 0) AS billed
+		 FROM services sv
+		 LEFT JOIN usage_samples us
+		   ON us.service_id = sv.id AND us.account_id = $1
+		 WHERE sv.enabled
+		 GROUP BY sv.key, sv.name, sv.rate_ppm
+		 ORDER BY sv.key`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ServiceUsage
+	for rows.Next() {
+		var u ServiceUsage
+		if err := rows.Scan(&u.Key, &u.Name, &u.RatePPM, &u.Metered, &u.Billed); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // NpubByAddr resolves the npub bound to a fips source address, if the address
@@ -119,5 +160,11 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 		return out, err
 	}
 	out.Open = open
+
+	svc, err := s.UsageByService(ctx, acct.ID)
+	if err != nil {
+		return out, err
+	}
+	out.Services = svc
 	return out, nil
 }

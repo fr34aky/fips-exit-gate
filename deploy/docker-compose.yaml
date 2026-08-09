@@ -30,6 +30,30 @@ services:
     cap_add:
       - NET_ADMIN   # Dante binds a specific interface
 
+  # Phase 4b: second egress service — Tor. Same gate/captive/agent/billing, just
+  # a new SOCKS endpoint on another port. Its SocksPort binds ONLY the fips
+  # address (never the public interface — that would be an open proxy); the nft
+  # gate lets only authorized fips sources reach it. Enable with `--profile tor`.
+  tor:
+    image: docker.io/osminogin/tor-simple:latest
+    profiles: ["tor"]
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["tor"]
+    command:
+      - "--SocksPort"
+      - "[${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}]:${TOR_PORT:-1081}"
+      - "--SocksPolicy"
+      - "accept [fd00::]/8"
+      - "--SocksPolicy"
+      - "reject *"
+      - "--DataDirectory"
+      - "/var/lib/tor"
+      # Tor rejects private/internal destinations by default
+      # (ClientRejectInternalAddresses 1), so clients cannot re-enter fips.
+    volumes:
+      - tor-data:/var/lib/tor
+
   captive:
     build:
       context: ..
@@ -65,3 +89,4 @@ services:
 
 volumes:
   agent-state:
+  tor-data:
