@@ -35,9 +35,18 @@ func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error)
 	if err != nil {
 		return Account{}, err
 	}
+	// The owner entry is enabled unless this address is ALREADY active elsewhere
+	// (e.g. the npub is a whitelisted guest on another account). The partial
+	// unique index whitelist_active_addr (fips_addr) WHERE enabled allows an
+	// address to be active on at most one account, so a guest logging into their
+	// own account gets a dormant (disabled) owner entry rather than a conflict —
+	// letting them view their account while their traffic stays attributed to
+	// the account where they are currently active.
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role)
-		 VALUES ($1, $2, $3::inet, 'owner') ON CONFLICT (account_id, npub) DO NOTHING`,
+		`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role, enabled)
+		 VALUES ($1, $2, $3::inet, 'owner',
+		         NOT EXISTS (SELECT 1 FROM whitelist_entries WHERE fips_addr = $3::inet AND enabled))
+		 ON CONFLICT (account_id, npub) DO NOTHING`,
 		acct.ID, npub, addr.String()); err != nil {
 		return Account{}, err
 	}

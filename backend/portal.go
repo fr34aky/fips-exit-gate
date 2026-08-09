@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -151,6 +152,7 @@ func (p *portal) authFips(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+		log.Printf("portal: authFips CreateAccount(%s): %v", npub, err)
 		http.Error(w, "could not create account", http.StatusInternalServerError)
 		return
 	}

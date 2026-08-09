@@ -1,7 +1,7 @@
 # Exit-agent image. Unlike the captive daemon it needs the nft binary at
 # runtime (it drives netfilter), so it runs on a slim Debian base rather than
 # distroless. Deploy with host networking + CAP_NET_ADMIN.
-FROM docker.io/library/golang:1.22-bookworm AS build
+FROM docker.io/library/golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod ./
 COPY pkg ./pkg

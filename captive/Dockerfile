@@ -1,5 +1,5 @@
 # Captive daemon: static Go binary on a distroless-style minimal base.
-FROM docker.io/library/golang:1.22-bookworm AS build
+FROM docker.io/library/golang:1.25-bookworm AS build
 WORKDIR /src
 # Build in the module context (the whole repo) so pkg/ is available later.
 COPY go.mod ./
