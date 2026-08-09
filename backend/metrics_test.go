@@ -22,7 +22,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	p := testPortal(t, st, false)
 
 	// Open (no token) — content check.
-	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, m, ""))
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, m, ""))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/metrics")
 	if err != nil {
@@ -44,7 +44,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 
 	// Token-gated.
-	srv2 := httptest.NewServer(routes(h, p, st, "admintok", nil, m, "sekret"))
+	srv2 := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, m, "sekret"))
 	defer srv2.Close()
 	r1, _ := http.Get(srv2.URL + "/metrics")
 	r1.Body.Close()

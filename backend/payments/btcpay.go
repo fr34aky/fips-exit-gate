@@ -69,11 +69,14 @@ type InvoiceRequest struct {
 	RedirectURL string
 }
 
-// Invoice is the created BTCPay invoice.
+// Invoice is a created invoice from a payment provider. A provider fills in the
+// way the buyer pays: CheckoutLink for a hosted checkout to redirect to (BTCPay),
+// or Bolt11 for a Lightning invoice the portal displays (phoenixd).
 type Invoice struct {
 	ID           string `json:"id"`
 	CheckoutLink string `json:"checkoutLink"`
 	Status       string `json:"status"`
+	Bolt11       string `json:"-"` // Lightning payment request (phoenixd)
 }
 
 // btcAmount formats msat as a BTC decimal string (8 dp — the on-chain unit).

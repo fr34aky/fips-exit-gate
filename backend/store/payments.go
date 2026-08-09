@@ -7,12 +7,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// AttachInvoice records the BTCPay invoice id and checkout URL on a pending
-// purchase, so later webhooks can find the purchase by invoice id.
-func (s *Store) AttachInvoice(ctx context.Context, purchaseID, invoiceID, checkoutURL string) error {
+// AttachInvoice records the provider's invoice id, the checkout/pay URL, and
+// (for Lightning) the BOLT11 payment request on a pending purchase, so later
+// webhooks/polls can find the purchase by invoice id. payRequest is "" for
+// BTCPay (hosted checkout) and the BOLT11 for phoenixd.
+func (s *Store) AttachInvoice(ctx context.Context, purchaseID, invoiceID, checkoutURL, payRequest string) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE purchases SET btcpay_invoice_id = $2, checkout_url = $3 WHERE id = $1`,
-		purchaseID, invoiceID, checkoutURL)
+		`UPDATE purchases SET btcpay_invoice_id = $2, checkout_url = $3, pay_request = NULLIF($4, '') WHERE id = $1`,
+		purchaseID, invoiceID, checkoutURL, payRequest)
 	if err != nil {
 		return err
 	}
@@ -20,6 +22,61 @@ func (s *Store) AttachInvoice(ctx context.Context, purchaseID, invoiceID, checko
 		return ErrPurchaseNotFound
 	}
 	return nil
+}
+
+// PayView is a Lightning purchase's data for the portal pay page.
+type PayView struct {
+	Status      string // pending | processing | settled | invalid | expired
+	Bolt11      string
+	PackageName string
+	PriceMsat   int64
+}
+
+// PurchaseForPay loads a purchase for its owner's pay page (scoped to npub so
+// one account can't view another's invoice).
+func (s *Store) PurchaseForPay(ctx context.Context, purchaseID, npub string) (PayView, error) {
+	var v PayView
+	err := s.pool.QueryRow(ctx,
+		`SELECT p.status, COALESCE(p.pay_request, ''), pt.name, pt.price_msat
+		 FROM purchases p
+		 JOIN accounts a ON a.id = p.account_id
+		 JOIN package_types pt ON pt.id = p.package_type_id
+		 WHERE p.id = $1 AND a.npub = $2`, purchaseID, npub).
+		Scan(&v.Status, &v.Bolt11, &v.PackageName, &v.PriceMsat)
+	if err == pgx.ErrNoRows {
+		return PayView{}, ErrPurchaseNotFound
+	}
+	return v, err
+}
+
+// OpenInvoice is an unsettled Lightning purchase the reconciler polls.
+type OpenInvoice struct {
+	PurchaseID string
+	InvoiceID  string // provider payment id (phoenixd payment hash)
+	CreatedAt  time.Time
+}
+
+// ListOpenLightning returns not-yet-settled Lightning purchases (those with a
+// BOLT11), for the reconciler to poll/expire.
+func (s *Store) ListOpenLightning(ctx context.Context) ([]OpenInvoice, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, btcpay_invoice_id, created_at
+		 FROM purchases
+		 WHERE pay_request IS NOT NULL AND btcpay_invoice_id IS NOT NULL
+		   AND status IN ('pending', 'processing')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OpenInvoice
+	for rows.Next() {
+		var o OpenInvoice
+		if err := rows.Scan(&o.PurchaseID, &o.InvoiceID, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 // MarkProcessing records that a payment for invoiceID has been SEEN but is not

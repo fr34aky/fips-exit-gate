@@ -44,7 +44,7 @@ func TestWebhookDrivesAuthz(t *testing.T) {
 	p := testPortal(t, st, false)
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
 	ph := &payHandler{store: st, secret: []byte(secret)}
-	srv := httptest.NewServer(routes(h, p, st, "admintok", ph, nil, ""))
+	srv := httptest.NewServer(routes(h, p, st, "admintok", ph, nil, nil, ""))
 	defer srv.Close()
 
 	_, npub, addr := newTestKey(t)
@@ -56,7 +56,7 @@ func TestWebhookDrivesAuthz(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AttachInvoice(ctx, pid, "inv_wh", "http://checkout/inv_wh"); err != nil {
+	if err := st.AttachInvoice(ctx, pid, "inv_wh", "http://checkout/inv_wh", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestBuyCreatesInvoice(t *testing.T) {
 	p.pay = payments.NewClient(fake.URL, "k", "STORE1", fake.Client())
 	p.publicURL = "http://portal"
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
-	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, ""))
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
 	defer srv.Close()
 
 	jar, _ := cookiejar.New(nil)

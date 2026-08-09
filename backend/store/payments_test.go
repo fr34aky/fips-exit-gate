@@ -24,7 +24,7 @@ func buyPackage(t *testing.T, st *Store, npub, invoiceID string) (string, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AttachInvoice(ctx, pid, invoiceID, "http://checkout/"+invoiceID); err != nil {
+	if err := st.AttachInvoice(ctx, pid, invoiceID, "http://checkout/"+invoiceID, ""); err != nil {
 		t.Fatal(err)
 	}
 	return pid, invoiceID

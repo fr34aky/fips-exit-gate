@@ -79,3 +79,53 @@ func (ph *payHandler) webhook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 	}
 }
+
+// phoenixdHandler receives phoenixd (Lightning) webhooks. A Lightning payment is
+// final on receipt, so a verified payment_received grants access immediately.
+// A poll reconciler backs this up (missed webhook / expiry).
+type phoenixdHandler struct {
+	store   *store.Store
+	secret  []byte
+	metrics *metrics.CounterVec
+}
+
+func (h *phoenixdHandler) record(typ, result string) {
+	if h.metrics != nil {
+		h.metrics.With(typ, result).Inc()
+	}
+}
+
+func (h *phoenixdHandler) webhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "unreadable body")
+		return
+	}
+	if !payments.VerifyPhoenixSig(h.secret, body, r.Header.Get("X-Phoenix-Signature")) {
+		h.record(payments.EventPaymentReceived, "bad_signature")
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "bad webhook signature")
+		return
+	}
+	var ev payments.PhoenixEvent
+	if err := json.Unmarshal(body, &ev); err != nil || ev.PaymentHash == "" {
+		w.WriteHeader(http.StatusOK) // signed but irrelevant (e.g. a non-payment event)
+		return
+	}
+	if ev.Type != payments.EventPaymentReceived {
+		h.record(ev.Type, "ignored")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	switch err := h.store.GrantByInvoice(r.Context(), ev.PaymentHash); err {
+	case nil:
+		h.record(ev.Type, "ok")
+		w.WriteHeader(http.StatusOK)
+	case store.ErrPurchaseNotFound:
+		h.record(ev.Type, "unknown_invoice")
+		log.Printf("payments: phoenixd webhook for unknown payment %s", ev.PaymentHash)
+		w.WriteHeader(http.StatusOK)
+	default:
+		h.record(ev.Type, "error")
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+	}
+}

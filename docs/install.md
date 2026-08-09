@@ -6,9 +6,10 @@ They can be the same machine for testing, but the design keeps them separate so
 you can add more exit nodes against one backend.
 
 For every environment variable mentioned here, see
-[Configuration](configuration.md). For payments (BTCPay against your external
-nodes over Tor) see [the BTCPay runbook](phase4-btcpay.md); this guide brings up
-everything *except* real payments and uses admin credits to grant access.
+[Configuration](configuration.md). For payments, choose a rail
+(`PAYMENT_RAIL`): [BTCPay](phase4-btcpay.md) (on-chain BTC + Lightning + Monero)
+or [phoenixd](phoenixd.md) (direct Lightning, lighter to run). This guide brings
+up everything *except* real payments and uses admin credits to grant access.
 
 ## Topology
 

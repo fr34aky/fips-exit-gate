@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pay with Lightning · fips-exit</title>{{template "styles" .}}</head><body><main>
+<div class="row" style="justify-content:space-between">
+  <h1 style="margin:0">Pay with Lightning</h1>
+  <a href="/dashboard"><button class="ghost">Back</button></a>
+</div>
+
+<div class="card">
+  <div><strong>{{.Name}}</strong> · <span class="pill">{{sats .PriceMsat}}</span></div>
+  <p class="muted">Scan or open this invoice in any Lightning wallet. Access unlocks
+  automatically the moment the payment is received.</p>
+
+  <p><a href="lightning:{{.Bolt11}}"><button>Open in wallet</button></a></p>
+
+  <p class="muted">Or copy the invoice:</p>
+  <textarea id="bolt11" readonly onclick="this.select()">{{.Bolt11}}</textarea>
+  <p><button class="ghost" id="copy">Copy invoice</button></p>
+
+  <p id="status" class="muted">Waiting for payment…</p>
+</div>
+
+<script>
+document.getElementById('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(document.getElementById('bolt11').value);
+        document.getElementById('copy').textContent = 'Copied'; } catch (e) {}
+});
+const id = {{.ID}};
+async function poll() {
+  try {
+    const r = await fetch('/pay/' + encodeURIComponent(id) + '/status');
+    const j = await r.json();
+    if (j.status === 'settled') { document.getElementById('status').textContent = 'Paid — unlocking…'; location.href = '/dashboard'; return; }
+    if (j.status === 'expired' || j.status === 'invalid') { document.getElementById('status').textContent = 'This invoice expired. Start a new purchase.'; return; }
+  } catch (e) {}
+  setTimeout(poll, 2000);
+}
+poll();
+</script>
+</main></body></html>

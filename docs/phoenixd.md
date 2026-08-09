@@ -1,0 +1,94 @@
+# Payments — phoenixd (direct Lightning)
+
+An alternative to [BTCPay](phase4-btcpay.md) for operators who just want to
+accept **Lightning** and would rather not run the whole BTCPay stack. It talks
+directly to an [ACINQ **phoenixd**](https://phoenix.acinq.co/server) node — a
+single self-custodial binary that manages channels/liquidity automatically (no
+bitcoind, no channel ops).
+
+Select it with `PAYMENT_RAIL=phoenixd`.
+
+```
+buyer ──/buy──▶ portal ──/createinvoice──▶ phoenixd ──▶ Lightning
+   ▲                │  BOLT11
+   │  /pay/{id}     ▼
+   └── pays with any Lightning wallet
+portal ◀── payment_received webhook (signed) ── phoenixd   (+ poll reconciler)
+```
+
+## Tradeoffs vs BTCPay
+
+- **Lightning only** — no on-chain BTC, no Monero (that's what BTCPay's weight
+  buys). Lightning is final on receipt, so there's no confirmation/optimistic
+  logic — a verified payment grants access immediately.
+- **Minimal ops** — one binary, automated liquidity via ACINQ as LSP; reachable
+  behind NAT/Tor with no public node.
+- **Receiving fees & minimums** — because ACINQ provides liquidity, receiving
+  costs a service/liquidity fee (and a mining-fee component when a splice is
+  needed). Price packages **above** that floor; very small (sub-~1000-sat)
+  packages may not be viable. Check the current phoenixd/ACINQ fee schedule.
+- **Counterparty** — self-custodial (you hold the seed), but ACINQ is a required
+  LSP; if sovereignty matters, BTCPay against your own node avoids that.
+
+## Settlement model
+
+Two paths land on the same idempotent store seam (`GrantByInvoice`), so a
+payment settles reliably:
+
+1. **Webhook** — phoenixd POSTs `payment_received` to
+   `${PORTAL_PUBLIC_URL}/payments/phoenixd/webhook`, HMAC-signed
+   (`X-Phoenix-Signature`, key = `PHOENIXD_WEBHOOK_SECRET`). Grants immediately.
+2. **Reconciler** — a background loop polls phoenixd
+   (`GET /payments/incoming/{hash}`) for open Lightning purchases, so a missed or
+   differently-signed webhook still settles, and unpaid invoices are **expired**
+   after `PHOENIXD_INVOICE_TTL_S`.
+
+The buyer sees the BOLT11 on the portal's own `/pay/{id}` page (copy + a
+`lightning:` link) which polls until paid, then sends them to the dashboard.
+
+## Configure
+
+phoenixd side (`~/.phoenix/phoenix.conf`):
+
+```
+http-password=<the PHOENIXD_PASSWORD you set>
+webhook-url=http://<backend>:8080/payments/phoenixd/webhook
+webhook-secret=<the PHOENIXD_WEBHOOK_SECRET you set>
+```
+
+backend (`backend.env`):
+
+```sh
+PAYMENT_RAIL=phoenixd
+PHOENIXD_URL=http://127.0.0.1:9740
+PHOENIXD_PASSWORD=...
+PHOENIXD_WEBHOOK_SECRET=...
+# PHOENIXD_SOCKS5=127.0.0.1:9050   # if phoenixd/backend are split and reached over Tor
+```
+
+The backend refuses to start with `PAYMENT_RAIL=phoenixd` if
+`PHOENIXD_WEBHOOK_SECRET` is empty (an unsigned webhook would be forgeable). The
+reconciler is the safety net if your phoenixd version signs webhooks differently
+— payments still settle by polling; verify `X-Phoenix-Signature` against your
+version and adjust if needed.
+
+## Local test with `cmd/fake-phoenixd`
+
+No node needed to exercise the whole flow end to end:
+
+```sh
+# backend pointed at the fake, rail = phoenixd:
+export PAYMENT_RAIL=phoenixd PHOENIXD_URL=http://127.0.0.1:9740 PHOENIXD_PASSWORD=x
+export PHOENIXD_WEBHOOK_SECRET=whsec PORTAL_PUBLIC_URL=http://localhost:8080
+go run ./backend &
+
+# the fake node: serves /createinvoice + /payments/incoming, and /sim/{hash}/pay
+# fires the signed webhook:
+go run ./cmd/fake-phoenixd -listen :9740 \
+  -webhook-url http://127.0.0.1:8080/payments/phoenixd/webhook -secret whsec &
+
+# log in, buy a package -> the /pay page shows a fake BOLT11 and its payment hash
+# (see the fake-phoenixd log). Simulate the payment:
+curl -X POST http://127.0.0.1:9740/sim/<payment-hash>/pay
+# -> webhook fires, access is granted, the /pay page redirects to the dashboard.
+```

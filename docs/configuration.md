@@ -37,11 +37,18 @@ Read by `backend/` (see `backend/main.go`).
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
 | `USAGE_INTERVAL_S` | `30` | Usage-report interval advertised to agents (seconds). |
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |
+| `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |
 | `BTCPAY_STORE_ID` | — | BTCPay store id. |
 | `BTCPAY_WEBHOOK_SECRET` | — | Verifies the BTCPay webhook HMAC (`BTCPay-Sig`). |
 | `BTCPAY_SOCKS5` | — | SOCKS5 proxy (e.g. `127.0.0.1:9050`) to reach a BTCPay `.onion` over Tor. |
+| `PHOENIXD_URL` | — | phoenixd base URL (e.g. `http://127.0.0.1:9740`). |
+| `PHOENIXD_PASSWORD` | — | phoenixd http-password (basic auth). |
+| `PHOENIXD_WEBHOOK_SECRET` | — | Verifies the phoenixd webhook HMAC (`X-Phoenix-Signature`). |
+| `PHOENIXD_SOCKS5` | — | Optional SOCKS5 to reach a phoenixd `.onion` over Tor. |
+| `PHOENIXD_POLL_INTERVAL_S` | `15` | Reconciler poll interval (settle backup for missed webhooks + expiry). |
+| `PHOENIXD_INVOICE_TTL_S` | `3600` | Unpaid Lightning invoice lifetime before it's voided. |
 | `METRICS_TOKEN` | — | If set, `GET /metrics` requires this bearer token; else `/metrics` is open (restrict by network). See [Observability](observability.md). |
 
 See the [BTCPay runbook](phase4-btcpay.md) for the required store **Transaction

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
 )
 
@@ -71,19 +72,39 @@ func main() {
 
 	m := newAppMetrics(st)
 
-	// Payments (Phase 4): enabled once BTCPay is configured. Without it the
-	// portal falls back to pending purchases (or dev autosettle).
+	// Payments: the rail is chosen by PAYMENT_RAIL (btcpay | phoenixd). Each rail
+	// requires its webhook secret so settlements can't be forged. Without a rail
+	// the portal falls back to pending purchases (or dev autosettle).
 	var ph *payHandler
-	if pc := newPaymentsClient(); pc != nil {
-		whSecret := os.Getenv("BTCPAY_WEBHOOK_SECRET")
-		if whSecret == "" {
-			// Without it the webhook HMAC can't be verified and settlements would
-			// be forgeable — refuse to start rather than run insecurely.
-			log.Fatal("backend: BTCPAY_WEBHOOK_SECRET is required when payments are enabled")
+	var phx *phoenixdHandler
+	var rec *reconciler
+	if provider, rail := newPaymentsProvider(); provider != nil {
+		p.pay = provider
+		switch rail {
+		case "btcpay":
+			whSecret := os.Getenv("BTCPAY_WEBHOOK_SECRET")
+			if whSecret == "" {
+				// Without it the webhook HMAC can't be verified and settlements
+				// would be forgeable — refuse to start rather than run insecurely.
+				log.Fatal("backend: BTCPAY_WEBHOOK_SECRET is required with PAYMENT_RAIL=btcpay")
+			}
+			ph = &payHandler{store: st, secret: []byte(whSecret), metrics: m.webhook}
+			log.Printf("backend: BTCPay payments enabled")
+		case "phoenixd":
+			whSecret := os.Getenv("PHOENIXD_WEBHOOK_SECRET")
+			if whSecret == "" {
+				log.Fatal("backend: PHOENIXD_WEBHOOK_SECRET is required with PAYMENT_RAIL=phoenixd")
+			}
+			phx = &phoenixdHandler{store: st, secret: []byte(whSecret), metrics: m.webhook}
+			rec = &reconciler{
+				store:    st,
+				ln:       provider.(*payments.Phoenixd),
+				interval: time.Duration(getenvInt("PHOENIXD_POLL_INTERVAL_S", 15)) * time.Second,
+				ttl:      time.Duration(getenvInt("PHOENIXD_INVOICE_TTL_S", 3600)) * time.Second,
+				metrics:  m.webhook,
+			}
+			log.Printf("backend: phoenixd (Lightning) payments enabled")
 		}
-		p.pay = pc
-		ph = &payHandler{store: st, secret: []byte(whSecret), metrics: m.webhook}
-		log.Printf("backend: BTCPay payments enabled")
 	}
 	if os.Getenv("METRICS_TOKEN") == "" {
 		log.Printf("backend: METRICS_TOKEN unset — /metrics is open; restrict it by network")
@@ -91,8 +112,11 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           routes(h, p, st, adminToken, ph, m, os.Getenv("METRICS_TOKEN")),
+		Handler:           routes(h, p, st, adminToken, ph, phx, m, os.Getenv("METRICS_TOKEN")),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if rec != nil {
+		go rec.run(ctx)
 	}
 	go func() {
 		<-ctx.Done()
@@ -107,7 +131,7 @@ func main() {
 	}
 }
 
-func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payHandler, m *appMetrics, metricsToken string) http.Handler {
+func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payHandler, phx *phoenixdHandler, m *appMetrics, metricsToken string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Metrics (Prometheus text format). Gated by METRICS_TOKEN if set; otherwise
@@ -135,9 +159,12 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	mux.Handle("GET /admin/services", requireAdmin(adminToken, h.adminListServices))
 	mux.Handle("POST /admin/services", requireAdmin(adminToken, h.adminCreateService))
 
-	// BTCPay webhook (HMAC-verified in the handler, so no bearer middleware).
+	// Payment webhooks (HMAC-verified in the handler, so no bearer middleware).
 	if ph != nil {
 		mux.HandleFunc("POST /payments/btcpay/webhook", ph.webhook)
+	}
+	if phx != nil {
+		mux.HandleFunc("POST /payments/phoenixd/webhook", phx.webhook)
 	}
 
 	// User portal (login, dashboard, whitelist, captive landing).

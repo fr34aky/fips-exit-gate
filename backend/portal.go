@@ -31,9 +31,9 @@ type portal struct {
 	captiveSecret   []byte
 	trustFipsSource bool
 	secureCookies   bool
-	autoSettle      bool             // dev: settle purchases immediately (no payment)
-	pay             *payments.Client // nil until BTCPay is configured
-	publicURL       string           // portal base URL for BTCPay checkout redirects
+	autoSettle      bool              // dev: settle purchases immediately (no payment)
+	pay             payments.Provider // nil until a payment rail is configured
+	publicURL       string            // portal base URL for checkout/pay redirects
 	tmpl            *template.Template
 }
 
@@ -62,6 +62,46 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /captive", p.captive)
 	mux.HandleFunc("GET /packages", p.packagesPage)
 	mux.HandleFunc("POST /buy", p.buy)
+	mux.HandleFunc("GET /pay/{id}", p.payPage)
+	mux.HandleFunc("GET /pay/{id}/status", p.payStatus)
+}
+
+// payPage shows a Lightning invoice (BOLT11) for a pending purchase and polls
+// for payment; once settled it sends the buyer to the dashboard.
+func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	v, err := p.store.PurchaseForPay(r.Context(), r.PathValue("id"), npub)
+	if err != nil {
+		http.Error(w, "purchase not found", http.StatusNotFound)
+		return
+	}
+	if v.Status == "settled" {
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		return
+	}
+	p.render(w, "pay.html", map[string]any{
+		"ID": r.PathValue("id"), "Bolt11": v.Bolt11, "Name": v.PackageName,
+		"PriceMsat": v.PriceMsat, "Status": v.Status,
+	})
+}
+
+// payStatus returns the purchase status as JSON for the pay page's poll.
+func (p *portal) payStatus(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	v, err := p.store.PurchaseForPay(r.Context(), r.PathValue("id"), npub)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": v.Status})
 }
 
 func (p *portal) root(w http.ResponseWriter, r *http.Request) {
@@ -255,8 +295,8 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Real payment rail: create a BTCPay invoice and send the buyer to checkout.
-	// The webhook grants the entitlement (optimistically on Processing).
+	// Real payment rail: create an invoice. The settlement webhook (+ reconciler
+	// for Lightning) grants the entitlement.
 	if p.pay != nil {
 		pkg, err := p.store.GetPackage(ctx, packageID)
 		if err != nil {
@@ -273,7 +313,17 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
 			return
 		}
-		if err := p.store.AttachInvoice(ctx, id, inv.ID, inv.CheckoutLink); err != nil {
+		if inv.Bolt11 != "" {
+			// Lightning: display the invoice on our own page and poll for payment.
+			if err := p.store.AttachInvoice(ctx, id, inv.ID, p.publicURL+"/pay/"+id, inv.Bolt11); err != nil {
+				http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
+				return
+			}
+			http.Redirect(w, r, "/pay/"+id, http.StatusSeeOther)
+			return
+		}
+		// Hosted checkout (BTCPay): redirect the buyer there.
+		if err := p.store.AttachInvoice(ctx, id, inv.ID, inv.CheckoutLink, ""); err != nil {
 			http.Redirect(w, r, "/packages?err=1", http.StatusSeeOther)
 			return
 		}

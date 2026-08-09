@@ -22,7 +22,7 @@ func TestAuthVerifyRejectsStaleEvent(t *testing.T) {
 	st := testStoreMain(t)
 	p := testPortal(t, st, false)
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
-	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, ""))
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/auth/challenge")
@@ -65,7 +65,7 @@ func TestAuthVerifyRejectsWrongKind(t *testing.T) {
 	st := testStoreMain(t)
 	p := testPortal(t, st, false)
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
-	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, ""))
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
 	defer srv.Close()
 
 	resp, _ := http.Get(srv.URL + "/auth/challenge")
