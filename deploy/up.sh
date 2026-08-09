@@ -20,6 +20,7 @@ render_nft() {
     mkdir -p "$(dirname "$NFT_FILE")"
     FIPS_IF="${FIPS_IF:?}" EXIT_FIPS_ADDR="${EXIT_FIPS_ADDR:?}" \
     CAPTIVE_PORT="$CAPTIVE_PORT" \
+    MAX_CONNS_PER_SRC="${MAX_CONNS_PER_SRC:-0}" \
     SERVICES_FILE="$here/services.conf" ALLOWLIST_FILE="$here/allowlist.txt" \
         sh "$here/render-nftables.sh" > "$NFT_FILE"
     # Validate before touching the running ruleset.

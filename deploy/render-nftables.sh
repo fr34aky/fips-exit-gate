@@ -15,6 +15,7 @@
 #   CAPTIVE_PORT    local port of the captive daemon
 #   SERVICES_FILE   path to services.conf     (default: ./services.conf)
 #   ALLOWLIST_FILE  newline-separated fips addresses (default: ./allowlist.txt)
+#   MAX_CONNS_PER_SRC  per-source concurrent-connection ceiling (0 = disabled)
 set -eu
 
 FIPS_IF="${FIPS_IF:?FIPS_IF is required}"
@@ -22,6 +23,7 @@ EXIT_FIPS_ADDR="${EXIT_FIPS_ADDR:?EXIT_FIPS_ADDR is required}"
 CAPTIVE_PORT="${CAPTIVE_PORT:?CAPTIVE_PORT is required}"
 SERVICES_FILE="${SERVICES_FILE:-$(dirname "$0")/services.conf}"
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-$(dirname "$0")/allowlist.txt}"
+MAX_CONNS_PER_SRC="${MAX_CONNS_PER_SRC:-0}"
 
 # Collect enabled service ports.
 ports=""
@@ -42,6 +44,20 @@ if [ -f "$ALLOWLIST_FILE" ]; then
         esac
         elements="${elements:+$elements, }$addr"
     done < "$ALLOWLIST_FILE"
+fi
+
+# Optional per-source concurrent-connection ceiling. A filter chain (where
+# ct count belongs) that drops over-limit NEW connections from authorized
+# sources on service ports — so one npub/device can't exhaust the exit. Runs
+# before the nat gate (lower priority number). 0 = disabled.
+conn_limit_chain=""
+if [ "$MAX_CONNS_PER_SRC" -gt 0 ] 2>/dev/null; then
+    conn_limit_chain="
+    chain conn_limit {
+        type filter hook prerouting priority -160; policy accept;
+        iifname \"$FIPS_IF\" ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ports } ip6 saddr @authorized ct state new meter fips_connlimit { ip6 saddr ct count over $MAX_CONNS_PER_SRC } drop
+    }
+"
 fi
 
 cat <<EOF
@@ -87,5 +103,6 @@ $( [ -n "$elements" ] && printf '        elements = { %s }\n' "$elements" )
         type filter hook postrouting priority -150; policy accept;
         oifname "$FIPS_IF" ip6 daddr @authorized tcp sport { $ports } update @acct { ip6 daddr . tcp sport }
     }
+$conn_limit_chain
 }
 EOF

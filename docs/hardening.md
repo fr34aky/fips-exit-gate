@@ -35,3 +35,40 @@ docker run --rm --entrypoint sockd -v /tmp/s.conf:/tmp/s.conf:ro fips-exit/clear
 
 Rules are first-match, top-to-bottom; keep the blocks above the final
 `socks pass … command: connect`.
+
+## Per-account ceilings
+
+### Concurrent connections (nftables)
+
+Set `MAX_CONNS_PER_SRC` (default `0` = off) to cap the number of **simultaneous
+connections per source address** (per npub/device) on the service ports. The
+render script emits a filter chain that drops over-limit new connections from
+authorized sources (`ct count`), so one client can't exhaust the exit's sockets:
+
+```sh
+# deploy/.env
+MAX_CONNS_PER_SRC=256      # generous; stops abuse without breaking browsers
+./up.sh reload             # nft -c validates before loading
+```
+
+This is per **source address**, not per account — each of an account's
+whitelisted npubs gets its own ceiling (nftables has no notion of account
+membership). It counts connections, not bandwidth.
+
+### Bandwidth (tc)
+
+Byte-rate caps are a node-level traffic-control concern, applied with `tc` on the
+fips interface — outside the rendered ruleset because they depend on the node's
+link and desired policy. A per-source HTB example, egress toward clients:
+
+```sh
+IF=fips0
+tc qdisc add dev $IF root handle 1: htb default 10
+tc class add dev $IF parent 1: classid 1:1 htb rate 100mbit
+tc class add dev $IF parent 1:1 classid 1:10 htb rate 20mbit ceil 50mbit   # per-client default
+# Add u32/flower filters to map each authorized fips /128 to its own class.
+```
+
+Volume (not rate) is already metered and enforced by the quota system: usage
+draws down the package balance and exhaustion revokes the address within a usage
+interval (see [maintenance](maintenance.md#revoke-or-suspend-access)).
