@@ -272,6 +272,35 @@ Set the store's **Transaction Speed to ≥ 1 confirmation** so on-chain payments
 grant only once finalized (Lightning stays instant). Full runbook:
 [docs/phase4-btcpay.md](phase4-btcpay.md).
 
+## Client browser setup (PAC)
+
+Clients browse the Internet through the exit's SOCKS5 proxy while still reaching
+the fips mesh — the portal and every `.fips` service — natively. The repo ships
+a small **PAC** (proxy auto-config) template, [`deploy/fips.pac`](../deploy/fips.pac),
+that does exactly that split. Copy it and set `EXIT` to your exit node's fips
+address and clearnet port:
+
+```js
+// deploy/fips.pac
+var EXIT = "[fd6b:b19b:6700:c923:df48:31a8:698b:bb25]:1080";  // EXIT_FIPS_ADDR : CLEARNET_PORT
+```
+
+Then load it in the browser:
+
+- **Firefox** — Settings → Network Settings → *Automatic proxy configuration
+  URL* → `file:///path/to/fips.pac` (or an `http`/`.fips` URL you host it at).
+  Leave remote DNS on (`network.proxy.socks_remote_dns = true`, the default) so
+  hostnames resolve server-side.
+- **Chrome / Chromium** — launch with
+  `--proxy-pac-url=file:///path/to/fips.pac` (Chrome resolves SOCKS5 DNS
+  remotely by default).
+
+The PAC returns `DIRECT` for `.fips`, the fips ULA range, and localhost, and
+`SOCKS5 <exit>` for everything else. It has **no `DIRECT` fallback** on purpose:
+if the exit is down, Internet traffic fails closed rather than leaking around the
+proxy. Hosting the file at a `<npub>.fips` URL lets you push an exit-address
+change to every client at once.
+
 ## Uninstall / teardown
 
 ```sh
