@@ -89,11 +89,23 @@ release (a single binary) and start it once:
 > **before taking any payment**. It is self-custodial — the seed *is* the money;
 > lose it and the balance is gone. The HTTP API defaults to `127.0.0.1:9740`.
 
-Run it under **systemd** (or at least `nohup`) so it restarts on failure:
+**Keep it running under systemd** so it restarts on failure and survives reboots.
+The repo ships a unit at [`deploy/systemd/phoenixd.service`](../deploy/systemd/phoenixd.service):
 
 ```sh
-nohup ./phoenixd >/var/log/phoenixd.log 2>&1 &   # a systemd unit is better for prod
+sudo install -Dm755 ./phoenixd /usr/local/bin/phoenixd
+sudo install -Dm644 deploy/systemd/phoenixd.service /etc/systemd/system/phoenixd.service
+sudoedit /etc/systemd/system/phoenixd.service   # set User=/HOME= to the account owning ~/.phoenix
+sudo systemctl daemon-reload
+sudo systemctl enable --now phoenixd
+journalctl -u phoenixd -f
 ```
+
+Do the **first run manually** (the `./phoenixd` above) so the seed prints to your
+terminal and you back it up — don't let the first start happen under systemd, or
+the seed lands in the journal. Once initialized, the unit just runs the existing
+node. For a throwaway test, `nohup ./phoenixd >/var/log/phoenixd.log 2>&1 &` is
+fine.
 
 **2. Configure `~/.phoenix/phoenix.conf`**, then restart phoenixd:
 

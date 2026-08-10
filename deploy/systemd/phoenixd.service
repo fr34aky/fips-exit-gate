@@ -1,0 +1,30 @@
+# Run ACINQ phoenixd (Lightning) for the fips-exit payment rail.
+# See docs/phoenixd.md ("Going live"). Do the FIRST run manually to generate and
+# BACK UP the seed (otherwise it prints into the journal), then install this unit
+# for ongoing operation.
+#
+#   install -Dm755 phoenixd /usr/local/bin/phoenixd
+#   # edit User=/HOME= below to the account that owns ~/.phoenix
+#   install -Dm644 deploy/systemd/phoenixd.service /etc/systemd/system/phoenixd.service
+#   systemctl enable --now phoenixd
+[Unit]
+Description=phoenixd (Lightning) for fips-exit payments
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust to the account that owns ~/.phoenix (seed, phoenix.conf, database).
+User=ubuntu
+Environment=HOME=/home/ubuntu
+ExecStart=/usr/local/bin/phoenixd
+Restart=on-failure
+RestartSec=5
+# Hardening. phoenixd reads/writes its home (~/.phoenix), so do NOT add
+# ProtectHome — its home must stay writable.
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
