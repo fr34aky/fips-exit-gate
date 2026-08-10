@@ -2,13 +2,16 @@ package payments
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/elnosh/gonuts/cashu"
+	"github.com/fxamacker/cbor/v2"
 )
 
 // fakeMint answers the NUT-05 melt endpoints: a quote for 2000 sat + feeReserve,
@@ -69,5 +72,34 @@ func TestCashuMeltMintNotAccepted(t *testing.T) {
 	c := NewCashuRedeemer([]string{"https://other.example"}, srv.Client())
 	if _, err := c.Melt(context.Background(), cashuToken(t, srv.URL, 2100), "lnbc2u..."); !errors.Is(err, ErrMintNotAccepted) {
 		t.Fatalf("want ErrMintNotAccepted, got %v", err)
+	}
+}
+
+func TestCashuPaymentRequest(t *testing.T) {
+	c := NewCashuRedeemer([]string{"https://mint.example/"}, nil)
+	req, err := c.PaymentRequest(2000, "http://portal.fips:8080/pay/abc/cashu-receive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(req, "creqA") {
+		t.Fatalf("want creqA prefix, got %q", req)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(req, "creqA"))
+	if err != nil {
+		t.Fatalf("base64: %v", err)
+	}
+	var got nut18Request
+	if err := cbor.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("cbor: %v", err)
+	}
+	if got.Amount != 2000 || got.Unit != "sat" || !got.SingleUse {
+		t.Fatalf("request fields: %+v", got)
+	}
+	if len(got.Transports) != 1 || got.Transports[0].Type != "post" ||
+		got.Transports[0].Target != "http://portal.fips:8080/pay/abc/cashu-receive" {
+		t.Fatalf("transport: %+v", got.Transports)
+	}
+	if len(got.Mints) != 1 || got.Mints[0] != "https://mint.example" {
+		t.Fatalf("mints: %+v", got.Mints)
 	}
 }

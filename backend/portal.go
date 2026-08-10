@@ -66,6 +66,7 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /pay/{id}", p.payPage)
 	mux.HandleFunc("GET /pay/{id}/status", p.payStatus)
 	mux.HandleFunc("POST /pay/{id}/cashu", p.payCashu)
+	mux.HandleFunc("POST /pay/{id}/cashu-receive", p.cashuReceive)
 }
 
 // payPage shows a Lightning invoice (BOLT11) for a pending purchase and polls
@@ -91,11 +92,58 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 		// case-insensitive so wallets accept it.
 		qr = qrDataURI(strings.ToUpper(v.Bolt11))
 	}
-	p.render(w, "pay.html", map[string]any{
+	data := map[string]any{
 		"ID": r.PathValue("id"), "Bolt11": v.Bolt11, "Name": v.PackageName,
 		"PriceMsat": v.PriceMsat, "Status": v.Status, "QR": qr,
 		"Cashu": p.cashu != nil,
-	})
+	}
+	// Cashu: a NUT-18 payment request (creqA…) the buyer's wallet can scan, with
+	// its own QR — paying it POSTs a token to /pay/{id}/cashu-receive. The paste
+	// box works for wallets without NUT-18.
+	if p.cashu != nil && v.Bolt11 != "" {
+		target := p.publicURL + "/pay/" + r.PathValue("id") + "/cashu-receive"
+		if req, err := p.cashu.PaymentRequest(uint64(v.PriceMsat/1000), target); err == nil {
+			data["CashuReq"] = req
+			data["CashuQR"] = qrDataURI(req)
+		}
+	}
+	p.render(w, "pay.html", data)
+}
+
+// cashuReceive is the NUT-18 transport target: the payer's Cashu wallet POSTs a
+// token here (no portal session — it's a separate app), and we melt its proofs to
+// the purchase's invoice. Grant then flows via the phoenixd receipt like any
+// other payment. Unscoped by owner: paying only ever credits the purchase owner.
+func (p *portal) cashuReceive(w http.ResponseWriter, r *http.Request) {
+	if p.cashu == nil {
+		http.Error(w, "cashu payments not enabled", http.StatusNotFound)
+		return
+	}
+	id := r.PathValue("id")
+	bolt11, status, err := p.store.PurchaseInvoice(r.Context(), id)
+	if err != nil {
+		http.Error(w, "purchase not found", http.StatusNotFound)
+		return
+	}
+	if status == "settled" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if bolt11 == "" {
+		http.Error(w, "no lightning invoice for this purchase", http.StatusBadRequest)
+		return
+	}
+	var payload payments.PaymentRequestPayload
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
+		http.Error(w, "bad payload", http.StatusBadRequest)
+		return
+	}
+	if _, err := p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Proofs, bolt11); err != nil {
+		log.Printf("portal: cashu-receive melt for purchase %s: %v", id, err)
+		http.Error(w, "melt failed", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // payCashu redeems a pasted Cashu token by melting it (at the token's own mint)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -168,5 +169,48 @@ func TestBuyLightningRendersPayPage(t *testing.T) {
 	}
 	if !strings.Contains(page, "data:image/png;base64,") {
 		t.Errorf("pay page missing the QR code image")
+	}
+}
+
+// A NUT-18 wallet POSTs a token to the cashu-receive transport (no session); we
+// melt its proofs to the purchase's invoice.
+func TestCashuReceiveMelts(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pkgs, _ := st.ListPackages(ctx)
+
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/melt/quote/bolt11":
+			json.NewEncoder(w).Encode(map[string]any{"quote": "q", "amount": 2000, "fee_reserve": 10, "state": "UNPAID"})
+		case "/v1/melt/bolt11":
+			json.NewEncoder(w).Encode(map[string]any{"state": "PAID"})
+		}
+	}))
+	defer mint.Close()
+
+	p := testPortal(t, st, false)
+	p.cashu = payments.NewCashuRedeemer(nil, mint.Client())
+	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
+	defer srv.Close()
+
+	_, npub, _ := newTestKey(t)
+	pid := makeLightning(t, st, npub, pkgs, "ph_cashu")
+
+	payload, _ := json.Marshal(map[string]any{
+		"mint": mint.URL, "unit": "sat",
+		"proofs": []map[string]any{{"amount": 2100, "id": "009a1f293253e41e", "secret": "s", "C": "02aa"}},
+	})
+	resp, err := http.Post(srv.URL+"/pay/"+pid+"/cashu-receive", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cashu-receive status = %d, want 200", resp.StatusCode)
 	}
 }

@@ -16,15 +16,24 @@ CASHU_ACCEPTED_MINTS=   # optional allowlist; empty = any mint
 CASHU_SOCKS5=           # optional, for an .onion mint over Tor
 ```
 
-The pay page then shows a **"pay with a Cashu token"** box alongside the Lightning
-invoice. Paste a token sized to the package price; it's melted at its mint to the
-invoice, phoenixd receives, and the existing webhook/reconciler grants access. To
-test: fund a wallet at any mint, send yourself an exact-amount token, and paste
-it. Watch `docker logs -f fips-exit-backend-backend-1` for the melt result.
+The pay page then offers Cashu two ways, both sized to the package price:
+- **Scan** — a **NUT-18 payment request** (`creqA…`) QR. A wallet that supports
+  payment requests scans it and POSTs the token to `/pay/{id}/cashu-receive`,
+  which melts it. (Wallet NUT-18 support is still uneven; the paste box is the
+  reliable fallback.)
+- **Paste** — paste a token into the box; `POST /pay/{id}/cashu` melts it.
 
-Implemented in: `backend/payments/cashu.go` (`CashuRedeemer`), the
-`POST /pay/{id}/cashu` handler + pay.html box in `backend/portal.go`, wired in
-`backend/main.go`. Tests: `backend/payments/cashu_test.go`.
+Either way the token is melted at its mint to the purchase's invoice, phoenixd
+receives, and the existing webhook/reconciler grants access. To test: fund a
+wallet at any mint, and either scan the QR or send yourself an exact-amount token
+and paste it. Watch `docker logs -f fips-exit-backend-backend-1`.
+
+Implemented in: `backend/payments/cashu.go` (`CashuRedeemer.Melt` /
+`MeltProofs` / `PaymentRequest`), the `POST /pay/{id}/cashu` (paste) +
+`POST /pay/{id}/cashu-receive` (NUT-18 transport, unauthenticated) handlers +
+pay.html QR/box in `backend/portal.go`, `store.PurchaseInvoice`, wired in
+`backend/main.go`. Tests: `backend/payments/cashu_test.go`,
+`TestCashuReceiveMelts`.
 
 ## Why
 

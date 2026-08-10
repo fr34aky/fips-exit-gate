@@ -27,13 +27,17 @@
 
 {{if .Cashu}}
 <div class="card">
-  <div><strong>Or pay with a Cashu token</strong></div>
-  <p class="muted">Paste an ecash token sized to the package price. It's melted at
-  its mint to this invoice; access unlocks the same way. Overpayment isn't
-  refunded, so send the exact amount.</p>
+  <div><strong>Or pay with Cashu (ecash)</strong></div>
+  {{if .CashuQR}}<p style="text-align:center">
+    <img src="{{.CashuQR}}" alt="Cashu payment request QR" width="320" height="320"
+         style="max-width:100%;height:auto;background:#fff;padding:12px;border-radius:12px">
+  </p>
+  <p class="muted">Scan with a Cashu wallet that supports payment requests — or
+  paste a token below. Send the exact package price; overpayment isn't refunded.</p>
+  <textarea id="cashuReq" readonly onclick="this.select()">{{.CashuReq}}</textarea>{{end}}
   <form id="cashuForm">
     <textarea id="cashuToken" placeholder="cashuB… or cashuA…" required></textarea>
-    <p><button type="submit">Pay with Cashu</button></p>
+    <p><button type="submit">Pay with token</button></p>
   </form>
   <p id="cashuMsg" class="muted"></p>
 </div>

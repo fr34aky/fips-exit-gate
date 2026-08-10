@@ -49,6 +49,20 @@ func (s *Store) PurchaseForPay(ctx context.Context, purchaseID, npub string) (Pa
 	return v, err
 }
 
+// PurchaseInvoice returns a purchase's attached BOLT11 and status by id, NOT
+// scoped to an owner — for the unauthenticated Cashu (NUT-18) receive transport,
+// where the payer's wallet posts without a portal session. Paying for a purchase
+// only credits its owner, so this is safe to leave unscoped.
+func (s *Store) PurchaseInvoice(ctx context.Context, purchaseID string) (bolt11, status string, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(pay_request, ''), status FROM purchases WHERE id = $1`, purchaseID).
+		Scan(&bolt11, &status)
+	if err == pgx.ErrNoRows {
+		return "", "", ErrPurchaseNotFound
+	}
+	return bolt11, status, err
+}
+
 // OpenInvoice is an unsettled Lightning purchase the reconciler polls.
 type OpenInvoice struct {
 	PurchaseID string

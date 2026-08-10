@@ -3,6 +3,7 @@ package payments
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,13 +12,17 @@ import (
 	"time"
 
 	"github.com/elnosh/gonuts/cashu"
+	"github.com/fxamacker/cbor/v2"
 )
 
-// CashuRedeemer accepts a Cashu ecash token and melts it at the token's OWN mint
-// (NUT-05) to pay a given BOLT11 — the "accept-and-melt" rail layered on phoenixd.
-// No custody: we grant only on the resulting Lightning receipt into our node, so
-// a mint that won't melt just yields a failed payment (no grant, no loss). The
+// CashuRedeemer accepts Cashu ecash and melts it at the token's OWN mint (NUT-05)
+// to pay a given BOLT11 — the "accept-and-melt" rail layered on phoenixd. No
+// custody: we grant only on the resulting Lightning receipt into our node, so a
+// mint that won't melt just yields a failed payment (no grant, no loss). The
 // buyer's proofs are spent atomically by the mint on a successful melt.
+//
+// Two ways in: a pasted token (Melt), or a NUT-18 payment request the buyer's
+// wallet scans and posts back (PaymentRequest + MeltProofs).
 // See docs/design/cashu-accept-and-melt.md.
 type CashuRedeemer struct {
 	accepted map[string]bool // optional mint allowlist; empty = accept any mint
@@ -25,8 +30,8 @@ type CashuRedeemer struct {
 }
 
 // NewCashuRedeemer builds a redeemer. acceptedMints is an optional allowlist of
-// mint base URLs; empty means accept a token from any mint (safe here because we
-// grant only on realized receipt).
+// mint base URLs; empty means accept a token from any mint (safe here, since
+// access is granted only on realized receipt).
 func NewCashuRedeemer(acceptedMints []string, hc *http.Client) *CashuRedeemer {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
@@ -43,7 +48,7 @@ func NewCashuRedeemer(acceptedMints []string, hc *http.Client) *CashuRedeemer {
 var (
 	// ErrMintNotAccepted means the token's mint is not in the allowlist.
 	ErrMintNotAccepted = errors.New("payments: cashu mint not accepted")
-	// ErrTokenUnderfunded means the token can't cover the invoice plus fees.
+	// ErrTokenUnderfunded means the proofs can't cover the invoice plus fees.
 	ErrTokenUnderfunded = errors.New("payments: cashu token does not cover invoice + fees")
 )
 
@@ -62,16 +67,21 @@ type meltResp struct {
 	Paid  bool   `json:"paid"` // legacy pre-state field
 }
 
-// Melt pays bolt11 using a received Cashu token via the token's own mint. Returns
-// the sats that will land (the invoice amount). Any overpayment above
-// amount+fee_reserve is forfeited to the mint (no change is requested) — callers
-// should tell buyers to present a token sized to the package price.
+// Melt decodes a serialized Cashu token and melts its proofs to pay bolt11.
 func (c *CashuRedeemer) Melt(ctx context.Context, token, bolt11 string) (uint64, error) {
 	tok, err := cashu.DecodeToken(strings.TrimSpace(token))
 	if err != nil {
 		return 0, fmt.Errorf("payments: decode cashu token: %w", err)
 	}
-	mint := normalizeMint(tok.Mint())
+	return c.MeltProofs(ctx, tok.Mint(), tok.Proofs(), bolt11)
+}
+
+// MeltProofs melts the given proofs at `mint` to pay bolt11, returning the sats
+// that will land (the invoice amount). Any overpayment above amount+fee_reserve
+// is forfeited to the mint (no change is requested — a v1 cut), so callers should
+// tell buyers to present proofs sized to the package price.
+func (c *CashuRedeemer) MeltProofs(ctx context.Context, mint string, proofs cashu.Proofs, bolt11 string) (uint64, error) {
+	mint = normalizeMint(mint)
 	if len(c.accepted) > 0 && !c.accepted[mint] {
 		return 0, ErrMintNotAccepted
 	}
@@ -82,23 +92,65 @@ func (c *CashuRedeemer) Melt(ctx context.Context, token, bolt11 string) (uint64,
 		map[string]string{"request": bolt11, "unit": "sat"}, &q); err != nil {
 		return 0, fmt.Errorf("payments: cashu melt quote: %w", err)
 	}
-	if need := q.Amount + q.FeeReserve; tok.Amount() < need {
-		return 0, fmt.Errorf("%w: have %d sat, need %d", ErrTokenUnderfunded, tok.Amount(), need)
+	if need := q.Amount + q.FeeReserve; proofs.Amount() < need {
+		return 0, fmt.Errorf("%w: have %d sat, need %d", ErrTokenUnderfunded, proofs.Amount(), need)
 	}
 
-	// 2. Melt: hand the token's proofs to the mint, which pays our invoice.
+	// 2. Melt: hand the proofs to the mint, which pays our invoice.
 	var m meltResp
 	if err := c.post(ctx, mint+"/v1/melt/bolt11",
-		map[string]any{"quote": q.Quote, "inputs": tok.Proofs()}, &m); err != nil {
+		map[string]any{"quote": q.Quote, "inputs": proofs}, &m); err != nil {
 		return 0, fmt.Errorf("payments: cashu melt: %w", err)
 	}
 	// UNPAID = the mint could not pay (proofs returned); anything else (PAID, or
-	// PENDING = in flight) means the payment was initiated — the actual grant is
-	// gated on our phoenixd receiving it, so optimistic here is safe.
+	// PENDING = in flight) means it was initiated — the real grant is gated on our
+	// phoenixd receiving it, so optimistic here is safe.
 	if !m.Paid && strings.EqualFold(m.State, "UNPAID") {
 		return 0, fmt.Errorf("payments: cashu melt not paid (state=%q)", m.State)
 	}
 	return q.Amount, nil
+}
+
+// --- NUT-18 payment request (a QR the buyer's Cashu wallet scans to pay) ---
+
+type prTransport struct {
+	Type   string `cbor:"t"`
+	Target string `cbor:"a"`
+}
+
+type nut18Request struct {
+	Amount     uint64        `cbor:"a,omitempty"`
+	Unit       string        `cbor:"u,omitempty"`
+	SingleUse  bool          `cbor:"s,omitempty"`
+	Mints      []string      `cbor:"m,omitempty"`
+	Transports []prTransport `cbor:"t,omitempty"`
+}
+
+// PaymentRequest builds a NUT-18 payment request (creqA…) for amountSat that asks
+// the payer's wallet to POST the token to postTarget. Wallets that support NUT-18
+// can scan it; others fall back to the paste box.
+func (c *CashuRedeemer) PaymentRequest(amountSat uint64, postTarget string) (string, error) {
+	req := nut18Request{
+		Amount: amountSat, Unit: "sat", SingleUse: true,
+		Transports: []prTransport{{Type: "post", Target: postTarget}},
+	}
+	for m := range c.accepted {
+		req.Mints = append(req.Mints, m)
+	}
+	b, err := cbor.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	return "creqA" + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// PaymentRequestPayload is the NUT-18 body a wallet POSTs to the transport target.
+type PaymentRequestPayload struct {
+	ID     string       `json:"id"`
+	Memo   string       `json:"memo"`
+	Mint   string       `json:"mint"`
+	Unit   string       `json:"unit"`
+	Proofs cashu.Proofs `json:"proofs"`
 }
 
 func (c *CashuRedeemer) post(ctx context.Context, url string, body, out any) error {
