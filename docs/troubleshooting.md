@@ -56,6 +56,39 @@ touches the SOCKS service ports by design — it does not open the portal port.
 config. (Verify with `curl -v` from the peer — `Connection timed out` = firewall
 drop.) See [Configuration](configuration.md#the-portal-and-the-fips-firewall).
 
+## Portal unreachable over fips after recreating the backend
+
+**Symptom:** `ss -ltn | grep 8080` shows `127.0.0.1:8080` (not `*:8080`); the
+admin API works on the backend host itself but fips clients can't reach the
+portal.
+**Cause:** the backend was (re)started with **bridge** networking — e.g. a plain
+`docker compose -f backend-compose.yaml up -d`, which binds `127.0.0.1:8080` and
+NATs the client source. It's then neither reachable on the fips address nor able
+to see real source addresses for transparent login.
+**Fix:** run the backend with **host networking** so it binds all interfaces
+(including the fips address) and sees the real source. With host networking the
+container can't resolve the compose `db` name, so point `DATABASE_URL` at the
+db container's bridge IP (`docker inspect <db> --format '{{range
+.NetworkSettings.Networks}}{{.IPAddress}}{{end}}'`). Confirm with `ss -ltn |
+grep 8080` → `*:8080`. See [Configuration](configuration.md#backend).
+
+## unbound container crash-loops (restarts climbing), but DNS still works
+
+**Symptom:** `docker ps` shows the unbound container `Restarting (0)`; its logs
+show only a `so-sndbuf` warning; `docker inspect` shows a high `RestartCount` and
+a started→finished gap of ~100 ms. Browsing through the exit still resolves.
+**Cause:** unbound **daemonizes by default** (forks to background), so the
+container's PID 1 exits `0` immediately and Docker restarts it forever. The
+`so-sndbuf` line is just a benign warning, not the cause. DNS keeps working
+because the exit host's `/etc/resolv.conf` points at systemd-resolved
+(`127.0.0.53`), so Dante resolves there — unbound was never actually in the path.
+**Fix:** set `do-daemonize: no` in `deploy/unbound.conf` (already the default in
+this repo), then `git pull` on the node and `docker restart <unbound-container>`.
+To actually route resolution through unbound (privacy-hardened, no query logging)
+rather than the uplink resolver, point the host resolver at it —
+`nameserver 127.0.0.1` — which on a systemd-resolved host means disabling its
+stub listener. This is optional; systemd-resolved resolves fine either way.
+
 ## Transparent fips login doesn't work
 
 - **Login page doesn't offer "Continue as this identity":** `transparentNpub`
