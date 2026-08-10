@@ -154,23 +154,57 @@ live rail). Watch the phoenixd balance and the reconciler metrics
 (`{type,result}`). To roll back, set `PAYMENT_RAIL=` (or `btcpay`) in
 `backend.env` and `compose up -d`.
 
-## Local test with `cmd/fake-phoenixd`
+## Local test with the fakes (no channel, no mint)
 
-No node needed to exercise the whole flow end to end:
+Exercise the whole flow — Lightning **and** Cashu — with no real node, no mint, and
+no channel. `cmd/fake-phoenixd` stands in for the Lightning node; `cmd/fake-cashu-mint`
+stands in for a mint and drives the fake node on melt.
 
 ```sh
-# backend pointed at the fake, rail = phoenixd:
-export PAYMENT_RAIL=phoenixd PHOENIXD_URL=http://127.0.0.1:9740 PHOENIXD_PASSWORD=x
-export PHOENIXD_WEBHOOK_SECRET=whsec PORTAL_PUBLIC_URL=http://localhost:8080
-go run ./backend &
-
-# the fake node: serves /createinvoice + /payments/incoming, and /sim/{hash}/pay
-# fires the signed webhook:
+# 1. Fake Lightning node (/sim/{hash}/pay fires the signed webhook):
 go run ./cmd/fake-phoenixd -listen :9740 \
   -webhook-url http://127.0.0.1:8080/payments/phoenixd/webhook -secret whsec &
 
-# log in, buy a package -> the /pay page shows a fake BOLT11 and its payment hash
-# (see the fake-phoenixd log). Simulate the payment:
-curl -X POST http://127.0.0.1:9740/sim/<payment-hash>/pay
-# -> webhook fires, access is granted, the /pay page redirects to the dashboard.
+# 2. Fake Cashu mint (NUT-05 melt -> drives the fake node above):
+go run ./cmd/fake-cashu-mint -listen :3338 \
+  -phoenixd-url http://127.0.0.1:9740 -mint-url http://127.0.0.1:3338 &
+
+# 3. Backend pointed at the fakes (needs a Postgres — set DATABASE_URL):
+export DATABASE_URL=postgres://fips:pw@localhost:5432/fips_exit
+export PAYMENT_RAIL=phoenixd PHOENIXD_URL=http://127.0.0.1:9740 PHOENIXD_PASSWORD=x \
+  PHOENIXD_WEBHOOK_SECRET=whsec PORTAL_PUBLIC_URL=http://localhost:8080 CASHU_ACCEPT=1
+go run ./backend &
 ```
+
+Log in and buy a package. The `/pay/{id}` page shows a fake BOLT11 (+ its QR) and,
+because `CASHU_ACCEPT=1`, a Cashu payment-request QR + paste box.
+
+**Lightning** — the invoice is `lnbcrt-fake-<hash>` (the hash is in the
+fake-phoenixd log). Simulate paying it:
+
+```sh
+curl -X POST http://127.0.0.1:9740/sim/<hash>/pay   # webhook -> granted -> page redirects
+```
+
+**Cashu (paste)** — mint yourself a token for the exact package price from the fake
+mint, then paste it on the pay page:
+
+```sh
+curl "http://127.0.0.1:3338/sim/token?amount=<package-price-sats>"   # -> cashuA…
+```
+
+Pasting melts it at the fake mint, which drives fake-phoenixd, which fires the
+webhook → granted.
+
+**Cashu (NUT-18 receive)** — simulate a wallet POSTing to the transport target:
+
+```sh
+curl -X POST http://127.0.0.1:8080/pay/<purchase-id>/cashu-receive \
+  -H 'Content-Type: application/json' \
+  -d '{"mint":"http://127.0.0.1:3338","unit":"sat","proofs":[{"amount":<price>,"id":"00ffffffffffffff","secret":"x","C":"02"}]}'
+```
+
+> On a deployed node, run the two fakes on the host and point `backend.env` at them
+> (`PHOENIXD_URL=http://127.0.0.1:9740`, `CASHU_ACCEPT=1`) — the host-networked
+> backend reaches both on loopback. Switch back to the real phoenixd when your
+> channel is open.

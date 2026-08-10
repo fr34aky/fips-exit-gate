@@ -83,7 +83,7 @@ func (s *server) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"isPaid": inv.Paid, "receivedSat": paidSat(inv)})
+	json.NewEncoder(w).Encode(map[string]any{"isPaid": inv.Paid, "receivedSat": paidSat(inv), "amountSat": inv.AmountSat})
 }
 
 func (s *server) simPay(w http.ResponseWriter, r *http.Request) {
