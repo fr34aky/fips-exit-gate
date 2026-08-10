@@ -31,9 +31,10 @@ type portal struct {
 	captiveSecret   []byte
 	trustFipsSource bool
 	secureCookies   bool
-	autoSettle      bool              // dev: settle purchases immediately (no payment)
-	pay             payments.Provider // nil until a payment rail is configured
-	publicURL       string            // portal base URL for checkout/pay redirects
+	autoSettle      bool                    // dev: settle purchases immediately (no payment)
+	pay             payments.Provider       // nil until a payment rail is configured
+	cashu           *payments.CashuRedeemer // nil unless the Cashu accept-and-melt option is enabled
+	publicURL       string                  // portal base URL for checkout/pay redirects
 	tmpl            *template.Template
 }
 
@@ -64,6 +65,7 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /buy", p.buy)
 	mux.HandleFunc("GET /pay/{id}", p.payPage)
 	mux.HandleFunc("GET /pay/{id}/status", p.payStatus)
+	mux.HandleFunc("POST /pay/{id}/cashu", p.payCashu)
 }
 
 // payPage shows a Lightning invoice (BOLT11) for a pending purchase and polls
@@ -92,7 +94,50 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 	p.render(w, "pay.html", map[string]any{
 		"ID": r.PathValue("id"), "Bolt11": v.Bolt11, "Name": v.PackageName,
 		"PriceMsat": v.PriceMsat, "Status": v.Status, "QR": qr,
+		"Cashu": p.cashu != nil,
 	})
+}
+
+// payCashu redeems a pasted Cashu token by melting it (at the token's own mint)
+// to the purchase's Lightning invoice. The mint pays our phoenixd invoice, and
+// the normal phoenixd webhook/reconciler path grants the entitlement — so this
+// handler just kicks off the melt and the pay page's poll finishes the job.
+func (p *portal) payCashu(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if p.cashu == nil {
+		http.Error(w, "cashu payments not enabled", http.StatusNotFound)
+		return
+	}
+	v, err := p.store.PurchaseForPay(r.Context(), r.PathValue("id"), npub)
+	if err != nil {
+		http.Error(w, "purchase not found", http.StatusNotFound)
+		return
+	}
+	if v.Status == "settled" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if v.Bolt11 == "" {
+		http.Error(w, "no lightning invoice for this purchase", http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("token"))
+	if token == "" {
+		http.Error(w, "no token", http.StatusBadRequest)
+		return
+	}
+	if _, err := p.cashu.Melt(r.Context(), token, v.Bolt11); err != nil {
+		log.Printf("portal: cashu melt for purchase %s: %v", r.PathValue("id"), err)
+		http.Error(w, "token rejected: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Payment initiated; phoenixd receipt -> webhook/reconciler -> grant. The pay
+	// page keeps polling /pay/{id}/status and redirects on settle.
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // payStatus returns the purchase status as JSON for the pay page's poll.

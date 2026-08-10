@@ -104,6 +104,20 @@ func main() {
 				metrics:  m.webhook,
 			}
 			log.Printf("backend: phoenixd (Lightning) payments enabled")
+			// Cashu accept-and-melt rides the phoenixd rail: a pasted token is
+			// melted at its mint to the purchase's bolt11, which phoenixd receives.
+			if os.Getenv("CASHU_ACCEPT") == "1" {
+				var mints []string
+				if s := os.Getenv("CASHU_ACCEPTED_MINTS"); s != "" {
+					mints = strings.Split(s, ",")
+				}
+				var hc *http.Client
+				if s := os.Getenv("CASHU_SOCKS5"); s != "" {
+					hc = torHTTPClient(s)
+				}
+				p.cashu = payments.NewCashuRedeemer(mints, hc)
+				log.Printf("backend: Cashu accept-and-melt enabled (%d mint(s) allowlisted; 0 = any)", len(mints))
+			}
 		}
 	}
 	if os.Getenv("METRICS_TOKEN") == "" {

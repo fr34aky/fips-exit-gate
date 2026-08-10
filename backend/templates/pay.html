@@ -25,12 +25,40 @@
   <p id="status" class="muted">Waiting for payment…</p>
 </div>
 
+{{if .Cashu}}
+<div class="card">
+  <div><strong>Or pay with a Cashu token</strong></div>
+  <p class="muted">Paste an ecash token sized to the package price. It's melted at
+  its mint to this invoice; access unlocks the same way. Overpayment isn't
+  refunded, so send the exact amount.</p>
+  <form id="cashuForm">
+    <textarea id="cashuToken" placeholder="cashuB… or cashuA…" required></textarea>
+    <p><button type="submit">Pay with Cashu</button></p>
+  </form>
+  <p id="cashuMsg" class="muted"></p>
+</div>
+{{end}}
+
 <script>
 document.getElementById('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(document.getElementById('bolt11').value);
         document.getElementById('copy').textContent = 'Copied'; } catch (e) {}
 });
 const id = {{.ID}};
+const cashuForm = document.getElementById('cashuForm');
+if (cashuForm) cashuForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById('cashuMsg');
+  msg.textContent = 'Redeeming…';
+  try {
+    const r = await fetch('/pay/' + encodeURIComponent(id) + '/cashu', {
+      method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({token: document.getElementById('cashuToken').value})
+    });
+    if (r.ok || r.status === 202) { msg.textContent = 'Token accepted — waiting for settlement…'; }
+    else { msg.textContent = await r.text(); }
+  } catch (err) { msg.textContent = 'Error: ' + err; }
+});
 async function poll() {
   try {
     const r = await fetch('/pay/' + encodeURIComponent(id) + '/status');

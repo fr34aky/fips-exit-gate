@@ -49,6 +49,9 @@ Read by `backend/` (see `backend/main.go`).
 | `PHOENIXD_SOCKS5` | — | Optional SOCKS5 to reach a phoenixd `.onion` over Tor. |
 | `PHOENIXD_POLL_INTERVAL_S` | `15` | Reconciler poll interval (settle backup for missed webhooks + expiry). |
 | `PHOENIXD_INVOICE_TTL_S` | `3600` | Unpaid Lightning invoice lifetime before it's voided. |
+| `CASHU_ACCEPT` | — | `1` enables the Cashu accept-and-melt option on the pay page (needs `PAYMENT_RAIL=phoenixd`): a pasted ecash token is melted at its mint to the purchase's invoice. See [design note](design/cashu-accept-and-melt.md). |
+| `CASHU_ACCEPTED_MINTS` | — | Optional comma-separated mint allowlist; empty = accept a token from any mint (safe, since access is granted only on realized receipt). |
+| `CASHU_SOCKS5` | — | Optional SOCKS5 to reach an `.onion` mint over Tor. |
 | `METRICS_TOKEN` | — | If set, `GET /metrics` requires this bearer token; else `/metrics` is open (restrict by network). See [Observability](observability.md). |
 
 See the [BTCPay runbook](phase4-btcpay.md) for the required store **Transaction

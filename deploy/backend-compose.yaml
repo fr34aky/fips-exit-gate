@@ -80,6 +80,11 @@ services:
       PHOENIXD_SOCKS5: ${PHOENIXD_SOCKS5:-}
       PHOENIXD_POLL_INTERVAL_S: ${PHOENIXD_POLL_INTERVAL_S:-15}
       PHOENIXD_INVOICE_TTL_S: ${PHOENIXD_INVOICE_TTL_S:-3600}
+      # Cashu accept-and-melt (rides the phoenixd rail): CASHU_ACCEPT=1 lets buyers
+      # pay by pasting an ecash token. See docs/design/cashu-accept-and-melt.md.
+      CASHU_ACCEPT: ${CASHU_ACCEPT:-}
+      CASHU_ACCEPTED_MINTS: ${CASHU_ACCEPTED_MINTS:-}
+      CASHU_SOCKS5: ${CASHU_SOCKS5:-}
       # Metrics: if set, /metrics requires this bearer token (see docs/observability.md).
       METRICS_TOKEN: ${METRICS_TOKEN:-}
 

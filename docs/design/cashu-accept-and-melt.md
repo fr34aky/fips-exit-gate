@@ -1,7 +1,30 @@
 # Design note — Cashu payment rail (accept-and-melt)
 
-> **Status: proposal, not implemented.** Design captured 2026-08-10 for a later
-> build. Nothing in the codebase implements this yet.
+> **Status: IMPLEMENTED (experimental, opt-in).** Enable with `CASHU_ACCEPT=1`
+> on the phoenixd rail. Token decoding via `github.com/elnosh/gonuts`; melt via
+> NUT-05 HTTP. Overpayment is forfeited (no change is requested — a v1 cut), so
+> buyers must send a token sized to the package price.
+
+## Enabling & testing
+
+Needs `PAYMENT_RAIL=phoenixd` (accept-and-melt melts into the purchase's BOLT11).
+In `backend.env`:
+
+```sh
+CASHU_ACCEPT=1
+CASHU_ACCEPTED_MINTS=   # optional allowlist; empty = any mint
+CASHU_SOCKS5=           # optional, for an .onion mint over Tor
+```
+
+The pay page then shows a **"pay with a Cashu token"** box alongside the Lightning
+invoice. Paste a token sized to the package price; it's melted at its mint to the
+invoice, phoenixd receives, and the existing webhook/reconciler grants access. To
+test: fund a wallet at any mint, send yourself an exact-amount token, and paste
+it. Watch `docker logs -f fips-exit-backend-backend-1` for the melt result.
+
+Implemented in: `backend/payments/cashu.go` (`CashuRedeemer`), the
+`POST /pay/{id}/cashu` handler + pay.html box in `backend/portal.go`, wired in
+`backend/main.go`. Tests: `backend/payments/cashu_test.go`.
 
 ## Why
 
