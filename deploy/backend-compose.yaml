@@ -28,6 +28,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Published on loopback so the host-networked backend can reach it at
+    # 127.0.0.1:5432 (a host-net container can't resolve the compose 'db' name).
+    ports:
+      - "127.0.0.1:5432:5432"
 
   backend:
     build:
@@ -36,18 +40,27 @@ services:
     image: fips-exit/backend:dev
     restart: unless-stopped
     logging: *default-logging
+    # Host networking so the backend binds the fips address (portal reachable over
+    # fips) AND sees real client source addresses (transparent login). Do NOT add
+    # a `ports:` mapping here — host mode already publishes on every host
+    # interface, and compose rejects host mode + ports together.
+    network_mode: host
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${PGUSER:-fips}:${PGPASSWORD}@db:5432/${PGDATABASE:-fips_exit}
+      # Host-net can't resolve the compose 'db' name; reach it on the loopback
+      # port the db publishes.
+      DATABASE_URL: postgres://${PGUSER:-fips}:${PGPASSWORD}@127.0.0.1:5432/${PGDATABASE:-fips_exit}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
       LISTEN: ":8080"
       SESSION_SECRET: ${SESSION_SECRET:-}
       CHALLENGE_SECRET: ${CHALLENGE_SECRET:-}
       CAPTIVE_TOKEN_SECRET: ${CAPTIVE_TOKEN_SECRET:-}
-      PORTAL_TRUST_FIPS_SOURCE: ${PORTAL_TRUST_FIPS_SOURCE:-0}
-      PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-1}
+      # Defaults suit the fips portal over HTTP (host networking); override in
+      # backend.env if you front the portal with a source-masking HTTPS proxy.
+      PORTAL_TRUST_FIPS_SOURCE: ${PORTAL_TRUST_FIPS_SOURCE:-1}
+      PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-0}
       PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-http://localhost:8080}
       PORTAL_DEV_AUTOSETTLE: ${PORTAL_DEV_AUTOSETTLE:-0}
       # Payments (Phase 4). Empty BTCPAY_URL disables the rail.
@@ -59,10 +72,6 @@ services:
       BTCPAY_SOCKS5: ${BTCPAY_SOCKS5:-}
       # Metrics: if set, /metrics requires this bearer token (see docs/observability.md).
       METRICS_TOKEN: ${METRICS_TOKEN:-}
-    # Exit nodes reach this API; front it with TLS in production. Bound to
-    # localhost here — adjust for your network.
-    ports:
-      - "127.0.0.1:8080:8080"
 
 volumes:
   pgdata:
