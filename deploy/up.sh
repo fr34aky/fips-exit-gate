@@ -47,9 +47,13 @@ case "${1:-up}" in
     reload)
         render_nft
         # Replace only our table, leaving the rest of the host firewall intact.
+        # This recreates the `authorized` set from allowlist.txt (empty in agent
+        # mode), so live grants are dropped until the agent re-syncs.
         nft delete table inet fips_exit 2>/dev/null || true
         nft -f "$NFT_FILE"
-        echo "nftables reloaded (authorized set + services re-applied)"
+        echo "nftables reloaded from $NFT_FILE"
+        echo "NOTE: the 'authorized' set was reset. In agent mode, restart the agent"
+        echo "      (docker restart <agent>) or wait for its next full sync to restore grants."
         ;;
     down)
         docker compose -f "$here/docker-compose.yaml" down

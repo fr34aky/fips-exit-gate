@@ -46,6 +46,16 @@ there, the backend doesn't consider it authorized.
 the npub you credited. Verify: `go run ./cmd/fips-derive <npub>` should equal the
 client's fips address.
 
+**Cause 4 — you just ran `up.sh reload`.** Reload does `nft delete table` +
+reload, which recreates the `authorized` set **empty** (it's seeded from
+`allowlist.txt`, empty in agent mode). Until the agent re-syncs, every client is
+unauthorized, so previously-working clients suddenly get the captive daemon — and
+because it can't intercept TLS, HTTPS fails as `curl: (35) OpenSSL SSL_connect:
+SSL_ERROR_SYSCALL` rather than an obvious redirect.
+**Fix:** restart the agent to force a full resync (`docker restart
+fips-exit-agent-1`), or wait for its next full-sync tick; confirm with
+`nft list set inet fips_exit authorized`.
+
 ## Portal (or backend API) unreachable over fips, but SOCKS works
 
 **Symptom:** from a fips peer, `:1080` connects but `:8080` times out; curl with
