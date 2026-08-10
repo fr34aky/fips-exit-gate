@@ -166,4 +166,7 @@ func TestBuyLightningRendersPayPage(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(page, "Pay with Lightning") || !strings.Contains(page, "lnbc1buy...") {
 		t.Fatalf("pay page missing the BOLT11 (status %d):\n%s", resp.StatusCode, page)
 	}
+	if !strings.Contains(page, "data:image/png;base64,") {
+		t.Errorf("pay page missing the QR code image")
+	}
 }

@@ -83,9 +83,15 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
+	var qr template.URL
+	if v.Bolt11 != "" {
+		// Uppercase → QR alphanumeric mode (denser, easier to scan); bech32 is
+		// case-insensitive so wallets accept it.
+		qr = qrDataURI(strings.ToUpper(v.Bolt11))
+	}
 	p.render(w, "pay.html", map[string]any{
 		"ID": r.PathValue("id"), "Bolt11": v.Bolt11, "Name": v.PackageName,
-		"PriceMsat": v.PriceMsat, "Status": v.Status,
+		"PriceMsat": v.PriceMsat, "Status": v.Status, "QR": qr,
 	})
 }
 
