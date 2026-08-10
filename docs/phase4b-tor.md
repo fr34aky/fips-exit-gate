@@ -68,13 +68,17 @@ something authorized-only is actually listening there):
    `deploy/services.conf`, then re-render:
 
    ```sh
-   ./up.sh reload           # re-render nftables from services.conf; nft -c validates
+   sudo ./up.sh reload      # re-render nftables from services.conf; nft -c validates
    sudo nft list table inet fips_exit | grep 1081   # confirm the port is gated
    ```
 
+   `up.sh` writes `/etc/nftables.d/` (needs root) and auto-loads `deploy/.env`
+   for `FIPS_IF`/`EXIT_FIPS_ADDR`/etc.; if you've already `set -a; . ./.env` in
+   your shell, use `sudo -E ./up.sh reload` to carry those through instead.
+
 To disable Tor, reverse all three: comment the `services.conf` line +
-`./up.sh reload`, `docker compose --profile tor down`, and disable the catalog
-row (`POST /admin/services {"key":"tor",...,"enabled":false}`).
+`sudo ./up.sh reload`, `docker compose --profile tor down`, and disable the
+catalog row (`POST /admin/services {"key":"tor",...,"enabled":false}`).
 
 ## Verifying M4b
 

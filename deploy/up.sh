@@ -12,6 +12,14 @@
 set -eu
 
 here="$(dirname "$0")"
+# Load config from this script's .env when it isn't already in the environment,
+# so `sudo ./up.sh …` works without -E (root can read the 0600 file). Vars the
+# caller already exported take precedence.
+if [ -z "${FIPS_IF:-}" ] && [ -f "$here/.env" ]; then
+    set -a
+    . "$here/.env"
+    set +a
+fi
 : "${CAPTIVE_PORT:=1088}"
 export CAPTIVE_PORT
 NFT_FILE="${NFT_FILE:-/etc/nftables.d/fips-exit.nft}"
