@@ -128,8 +128,17 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) runSync(ctx context.Context) {
 	backoff := newBackoff()
+	// Force a full reconcile on startup: the kernel set may have changed while we
+	// were down — e.g. `up.sh reload` recreates the nftables table with an empty
+	// authorized set. Our persisted revision would otherwise make the backend
+	// answer "unchanged" and we'd never refill it. rev=0 pulls the full set, which
+	// applyAuthz diffs against the live kernel set and repairs.
+	forceFull := true
 	for ctx.Err() == nil {
 		rev := a.store.snapshotRuntime().AuthzRev
+		if forceFull {
+			rev = 0
+		}
 		resp, err := a.client.getAuthz(ctx, rev, 50)
 		switch {
 		case err == errUnchanged:
@@ -147,6 +156,7 @@ func (a *Agent) runSync(ctx context.Context) {
 				sleep(ctx, backoff.next())
 				continue
 			}
+			forceFull = false
 			a.markAuthzOK()
 			backoff.reset()
 		}
