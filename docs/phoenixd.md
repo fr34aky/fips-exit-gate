@@ -72,6 +72,76 @@ reconciler is the safety net if your phoenixd version signs webhooks differently
 — payments still settle by polling; verify `X-Phoenix-Signature` against your
 version and adjust if needed.
 
+## Going live (production bring-up)
+
+Switching a node from the fake rail to a real phoenixd node. Assumes the backend
+runs **host-networked** via `backend-compose.yaml` (so it reaches phoenixd on
+`127.0.0.1:9740` and phoenixd reaches the backend on `127.0.0.1:8080`).
+
+**1. Run phoenixd on the backend host.** Grab the latest [ACINQ phoenixd](https://github.com/ACINQ/phoenixd)
+release (a single binary) and start it once:
+
+```sh
+./phoenixd    # first start creates ~/.phoenix/ and prints your seed + API password
+```
+
+> ⚠️ **Back up the seed** (the 12 words it prints / `~/.phoenix/seed.dat`) offline
+> **before taking any payment**. It is self-custodial — the seed *is* the money;
+> lose it and the balance is gone. The HTTP API defaults to `127.0.0.1:9740`.
+
+Run it under **systemd** (or at least `nohup`) so it restarts on failure:
+
+```sh
+nohup ./phoenixd >/var/log/phoenixd.log 2>&1 &   # a systemd unit is better for prod
+```
+
+**2. Configure `~/.phoenix/phoenix.conf`**, then restart phoenixd:
+
+```ini
+http-password=<the one generated on first run — reuse it>
+webhook-url=http://127.0.0.1:8080/payments/phoenixd/webhook
+webhook-secret=<openssl rand -hex 32>
+```
+
+**3. Point the backend at it — in `deploy/backend.env`:**
+
+```sh
+PAYMENT_RAIL=phoenixd
+PHOENIXD_URL=http://127.0.0.1:9740
+PHOENIXD_PASSWORD=<the http-password>
+PHOENIXD_WEBHOOK_SECRET=<the webhook-secret>
+```
+
+The backend **refuses to start** with `PAYMENT_RAIL=phoenixd` and an empty
+`PHOENIXD_WEBHOOK_SECRET` (forgeable-webhook fail-safe).
+
+**4. Restart the backend and retire the fake:**
+
+```sh
+cd deploy && set -a; . ./backend.env; set +a
+docker compose -f backend-compose.yaml up -d
+docker rm -f fake-btcpay
+docker logs fips-exit-backend-backend-1 2>&1 | grep -iE 'phoenixd|payment|reconcil|listen'
+```
+
+**5. Smoke test with a real payment.** Buy the cheapest package from the portal,
+pay the BOLT11 on the `/pay/{id}` page with any Lightning wallet, and confirm the
+entitlement appears in `/admin/authz` within a couple of seconds (webhook) or one
+poll interval (reconciler). Note the **first-ever receive also pays a one-time
+channel-funding fee**, so test with a viable amount, not dust.
+
+**6. Verify the webhook path.** phoenixd's webhook signature scheme can differ by
+version. If the immediate webhook grant doesn't fire, the **reconciler still
+settles by polling** (`PHOENIXD_POLL_INTERVAL_S`), so nothing gets stuck — then
+check the backend log for the webhook handler result and adjust `VerifyPhoenixSig`
+if your version signs differently.
+
+**Operations & rollback.** Receiving costs an ACINQ service/liquidity fee, so keep
+prices above the floor (this is why sub-~1000-sat promos aren't offered on the
+live rail). Watch the phoenixd balance and the reconciler metrics
+(`{type,result}`). To roll back, set `PAYMENT_RAIL=` (or `btcpay`) in
+`backend.env` and `compose up -d`.
+
 ## Local test with `cmd/fake-phoenixd`
 
 No node needed to exercise the whole flow end to end:
