@@ -111,26 +111,9 @@ wiring below applies to either.
 
 ## Local smoke test with `cmd/fake-btcpay`
 
-No BTCPay needed to exercise the full HMAC-signed flow end to end:
-
-```sh
-# 1. Backend with payments pointed at the fake, autosettle OFF.
-export DATABASE_URL=postgres://fips:pw@localhost:5433/fips_exit ADMIN_TOKEN=admintok
-export BTCPAY_URL=http://localhost:9000 BTCPAY_API_KEY=x BTCPAY_STORE_ID=STORE1
-export BTCPAY_WEBHOOK_SECRET=whsec PORTAL_PUBLIC_URL=http://localhost:8080
-go run ./backend &
-
-# 2. The fake BTCPay: serves the Greenfield invoice API + a checkout page whose
-#    buttons fire signed webhooks back at the backend.
-go run ./cmd/fake-btcpay -listen :9000 -base http://localhost:9000 \
-  -webhook-url http://localhost:8080/payments/btcpay/webhook -secret whsec &
-
-# 3. Log in, buy a package (redirects to the fake checkout). Click
-#    "Payment detected" → status goes to "confirming…" but NO access yet; click
-#    "Confirmed (Settled)" → access is granted. Or drive it headless:
-curl -X POST http://localhost:9000/sim/<invoice-id>/InvoiceProcessing   # confirming, no access
-curl -X POST http://localhost:9000/sim/<invoice-id>/InvoiceSettled      # finalized -> access
-```
+Exercise the full HMAC-signed flow with no BTCPay server — the recipe (grant only
+on `InvoiceSettled`, headless `/sim` calls) lives in
+[Testing payments](testing-payments.md#btcpay-cmdfake-btcpay).
 
 ## Threat model note
 
