@@ -63,13 +63,23 @@ services:
       PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-0}
       PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-http://localhost:8080}
       PORTAL_DEV_AUTOSETTLE: ${PORTAL_DEV_AUTOSETTLE:-0}
-      # Payments (Phase 4). Empty BTCPAY_URL disables the rail.
+      # Payments. PAYMENT_RAIL selects the rail: btcpay | phoenixd | empty.
+      PAYMENT_RAIL: ${PAYMENT_RAIL:-}
+      # BTCPay (PAYMENT_RAIL=btcpay). Empty BTCPAY_URL also disables it.
       BTCPAY_URL: ${BTCPAY_URL:-}
       BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
       BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
       BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
       # Reach BTCPay's .onion via the Tor container's SOCKS proxy (see btcpay-compose.yaml).
       BTCPAY_SOCKS5: ${BTCPAY_SOCKS5:-}
+      # phoenixd (PAYMENT_RAIL=phoenixd) — direct Lightning. The backend refuses to
+      # start without PHOENIXD_WEBHOOK_SECRET when this rail is selected. See docs/phoenixd.md.
+      PHOENIXD_URL: ${PHOENIXD_URL:-}
+      PHOENIXD_PASSWORD: ${PHOENIXD_PASSWORD:-}
+      PHOENIXD_WEBHOOK_SECRET: ${PHOENIXD_WEBHOOK_SECRET:-}
+      PHOENIXD_SOCKS5: ${PHOENIXD_SOCKS5:-}
+      PHOENIXD_POLL_INTERVAL_S: ${PHOENIXD_POLL_INTERVAL_S:-15}
+      PHOENIXD_INVOICE_TTL_S: ${PHOENIXD_INVOICE_TTL_S:-3600}
       # Metrics: if set, /metrics requires this bearer token (see docs/observability.md).
       METRICS_TOKEN: ${METRICS_TOKEN:-}
 
