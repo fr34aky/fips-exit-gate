@@ -59,10 +59,19 @@ on the same balance. You can disable any of them at any time.</div></details>
 package has run out or expired. Sign in and (if needed) top up, and you’ll be back online.</div></details>
 
 <details class="faq"><summary>Do I need to change any browser settings?</summary>
-<div>Point your browser’s SOCKS proxy at the exit and enable <em>remote DNS</em> (also called “proxy DNS”), so
-names are resolved at the exit — this is what lets <span class="mono">.onion</span> work and avoids DNS leaks.
-A small auto-config file (PAC) keeps <span class="mono">.fips</span> sites direct while sending the Internet
-through the exit. Ask your operator for it if you don’t have one.</div></details>
+<div>Use our ready-made proxy auto-config (PAC): it keeps <span class="mono">.fips</span> sites direct and sends
+the Internet through the exit, with <em>remote DNS</em> on (which is what lets <span class="mono">.onion</span>
+work and avoids DNS leaks).
+{{if .PacURL}}
+<p style="margin:.5rem 0 .2rem"><strong>Your PAC URL:</strong> <a href="{{.PacURL}}" class="mono">{{.PacURL}}</a></p>
+<ul style="margin:.2rem 0 0;padding-left:1.2rem">
+  <li><strong>Firefox:</strong> Settings → Network Settings → <em>Automatic proxy configuration URL</em> → paste the PAC URL above.</li>
+  <li><strong>Chrome / Chromium:</strong> launch with <span class="mono">--proxy-pac-url=&lt;the PAC URL&gt;</span>.</li>
+</ul>
+Both have proxy/remote DNS on by default.
+{{else}}
+Ask your operator for the PAC URL, then set it as your browser's automatic proxy configuration URL.
+{{end}}</div></details>
 
 <details class="faq"><summary>Can I reach .onion sites?</summary>
 <div>Yes — the Connectivity service reaches <span class="mono">.onion</span> addresses on the same connection,

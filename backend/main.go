@@ -69,6 +69,7 @@ func main() {
 	}
 	p.autoSettle = os.Getenv("PORTAL_DEV_AUTOSETTLE") == "1"
 	p.publicURL = strings.TrimRight(getenv("PORTAL_PUBLIC_URL", "http://localhost:8080"), "/")
+	p.pacExit = os.Getenv("PORTAL_PAC_EXIT") // e.g. npub1…exit….fips:1080; empty = derive from PORTAL_PUBLIC_URL
 
 	m := newAppMetrics(st)
 

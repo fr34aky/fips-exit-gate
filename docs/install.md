@@ -280,8 +280,12 @@ grant only once finalized (Lightning stays instant). Full runbook:
 Clients browse the Internet through the exit's SOCKS5 proxy while still reaching
 the fips mesh — the portal and every `.fips` service — natively. The repo ships
 a small **PAC** (proxy auto-config) template, [`deploy/fips.pac`](../deploy/fips.pac),
-that does exactly that split. Copy it and set `EXIT` to your exit node's
-**`<npub>.fips` name** and connectivity port:
+that does exactly that split. The backend also **serves a ready-made copy at
+`<portal>/fips.pac`** (pre-filled with the exit target from `PORTAL_PUBLIC_URL`
+or `PORTAL_PAC_EXIT`), and the portal's **Help/FAQ page links customers straight
+to it** — so distributing the file by hand is optional. To host it yourself,
+copy the template and set `EXIT` to your exit node's **`<npub>.fips` name** and
+connectivity port:
 
 ```js
 // deploy/fips.pac
