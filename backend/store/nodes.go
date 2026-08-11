@@ -103,11 +103,15 @@ func (s *Store) Services(ctx context.Context) ([]Service, error) {
 	return out, rows.Err()
 }
 
-// SeedDefaults inserts the baseline clearnet service if absent. Safe to re-run.
+// SeedDefaults inserts the baseline connectivity service if absent. Safe to
+// re-run. The key stays 'clearnet' (it's the FK on every usage row); only the
+// display name is "Connectivity" — the :1080 service now reaches clearnet plus
+// .onion via the dispatcher. ON CONFLICT DO NOTHING means an existing row keeps
+// its old name; rename a live catalog with an admin update / UPDATE (see docs).
 func (s *Store) SeedDefaults(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO services(key, name, port, rate_ppm)
-		 VALUES ('clearnet', 'Clearnet', 1080, 1000000)
+		 VALUES ('clearnet', 'Connectivity', 1080, 1000000)
 		 ON CONFLICT (key) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("store: seed services: %w", err)
