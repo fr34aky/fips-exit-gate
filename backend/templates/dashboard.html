@@ -1,32 +1,45 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dashboard · fips-exit</title>{{template "styles" .}}</head><body><main>
-<div class="row" style="justify-content:space-between">
+<title>Your account · fips-exit</title>{{template "styles" .}}</head><body><main>
+<div class="row" style="justify-content:space-between;align-items:center">
   <h1 style="margin:0">Your account</h1>
   <div class="row">
     <a href="/packages"><button>Buy data</button></a>
     <form method="post" action="/auth/logout"><button class="ghost">Sign out</button></form>
   </div>
 </div>
+
+{{if .Active}}<div class="banner good">
+  <span class="step">You're online</span>
+  <p style="margin:.3rem 0 0">You have an active package — your traffic is flowing through the exit.
+  Details below.</p>
+</div>{{else}}<div class="banner warn">
+  <span class="step">Not online</span>
+  <p style="margin:.3rem 0 .6rem">You don't have an active package right now. Buy data to get back online —
+  Lightning unlocks instantly.</p>
+  <a href="/packages"><button class="btn-lg">Buy data</button></a>
+</div>{{end}}
+
 <p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
 
-<h2>Packages</h2>
+<h2>Your data</h2>
 {{if .S.Entitlements}}
-<table><thead><tr><th>Type</th><th>Remaining</th><th>Expires</th><th>Status</th></tr></thead><tbody>
+<table><thead><tr><th>Package</th><th>Remaining</th><th>Expires</th><th>Status</th></tr></thead><tbody>
 {{range .S.Entitlements}}<tr>
-  <td>{{.Kind}}</td>
-  <td>{{if eq .Kind "volume"}}{{bytes .Remaining}} <span class="muted">/ {{bytes .VolumeBytes}}</span>{{else}}—{{end}}</td>
-  <td>{{.ExpiresAt.Format "2006-01-02"}}</td>
-  <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">inactive</span>{{end}}</td>
+  <td>{{if eq .Kind "volume"}}Data bundle{{else}}Time pass{{end}}</td>
+  <td>{{if eq .Kind "volume"}}{{bytes .Remaining}} <span class="muted">of {{bytes .VolumeBytes}}</span>{{else}}<span class="muted">Unlimited</span>{{end}}</td>
+  <td>{{.ExpiresAt.Format "2 Jan 2006"}}</td>
+  <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">used up / expired</span>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
-{{else}}<div class="card">No packages yet. <a href="/packages">Buy data →</a></div>{{end}}
-<p class="muted">Total used: {{bytes .S.UsageBytes}}</p>
+<p class="muted">Total used so far: {{bytes .S.UsageBytes}}.</p>
+{{else}}<div class="card">No packages yet. <a href="/packages">Choose a package →</a></div>{{end}}
 
 {{if .S.Services}}
-<h2>Usage by service</h2>
-<p class="muted">One shared balance, metered per service at its rate.</p>
-<table><thead><tr><th>Service</th><th>Rate</th><th>Traffic</th><th>Billed</th></tr></thead><tbody>
+<h2>Where your data went</h2>
+<p class="muted">One shared balance, metered per service at its own rate (e.g. Tor privacy costs a little more per
+byte than clearnet).</p>
+<table><thead><tr><th>Service</th><th>Rate</th><th>Traffic</th><th>Counted as</th></tr></thead><tbody>
 {{range .S.Services}}<tr>
   <td>{{.Name}}</td>
   <td>{{rate .RatePPM}}</td>
@@ -46,11 +59,13 @@
   <td>{{if .CheckoutURL}}<a href="{{.CheckoutURL}}"><button class="ghost">{{if eq .Status "processing"}}View invoice{{else}}Pay now{{end}}</button></a>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
-<p class="muted">Access unlocks once payment is confirmed — a block confirmation for on-chain Bitcoin, instantly for Lightning.</p>
+<p class="muted">Access unlocks once payment is confirmed — instantly for Lightning, or after a block
+confirmation for on-chain Bitcoin.</p>
 {{end}}
 
-<h2>Whitelisted identities</h2>
-<p class="muted">npubs allowed to consume this account's packages.</p>
+<h2>Shared access</h2>
+<p class="muted">Add your other devices (or people you trust) by their npub so they draw on this same
+package. You can disable any of them at any time.</p>
 <table><thead><tr><th>Identity</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
 {{range .S.Whitelist}}<tr>
   <td><div>{{if .Label}}{{.Label}}{{end}}</div><div class="mono muted">{{.Npub}}</div></td>
@@ -64,12 +79,12 @@
 </tbody></table>
 
 <div class="card">
-  <h2 style="margin-top:0">Add an identity</h2>
+  <h2 style="margin-top:0">Add a device or person</h2>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
   <form method="post" action="/whitelist/add">
     <p><input type="text" name="guest_npub" placeholder="npub1…" required></p>
-    <p><input type="text" name="label" placeholder="label (optional), e.g. laptop"></p>
-    <p><input type="submit" value="Add to whitelist"></p>
+    <p><input type="text" name="label" placeholder="label (optional), e.g. my laptop"></p>
+    <p><input type="submit" value="Add to my account"></p>
   </form>
 </div>
 </main></body></html>

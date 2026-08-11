@@ -336,7 +336,9 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error loading account", http.StatusInternalServerError)
 		return
 	}
-	p.render(w, "dashboard.html", map[string]any{"S": summary, "Err": r.URL.Query().Get("err")})
+	p.render(w, "dashboard.html", map[string]any{
+		"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err"),
+	})
 }
 
 func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
