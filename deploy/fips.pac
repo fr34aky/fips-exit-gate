@@ -2,10 +2,14 @@
 // fips exit node.
 //
 //   Internet traffic        -> the exit's SOCKS5 proxy (DNS resolved server-side)
+//   .onion addresses         -> same SOCKS5 proxy; the :1080 connectivity service
+//                               reaches Tor .onion too (the exit routes *.onion to
+//                               Tor), so no special PAC rule is needed for them
 //   .fips names & fd00::/8   -> DIRECT (reached natively over fips; this is how
 //   localhost                   the portal and .fips services load)
 //
-// Set EXIT to your exit node's <npub>.fips name and clearnet SOCKS port.
+// Set EXIT to your exit node's <npub>.fips name and connectivity SOCKS port
+// (:1080 — clearnet + .onion).
 // Address the exit by its <npub>.fips NAME, not a raw [fd..] IPv6 literal:
 // Firefox will not use a bracketed IPv6 literal as a SOCKS proxy target. The
 // name also resolves mesh-wide and survives an address change.
@@ -16,7 +20,7 @@
 function FindProxyForURL(url, host) {
   host = host.toLowerCase();
 
-  // Exit node: <npub>.fips : clearnet-port
+  // Exit node: <npub>.fips : connectivity-port (:1080 — clearnet + .onion)
   var EXIT = "npub1lx2m36mtzpvae7caw6tphqzhuyufg82y63p8lvd8n6nvkdkw0thq08hdpz.fips:1080";
 
   // fips mesh (the portal and every .fips service) — reached natively, not via
