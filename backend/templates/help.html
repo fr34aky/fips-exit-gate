@@ -62,13 +62,16 @@ package has run out or expired. Sign in and (if needed) top up, and you’ll be 
 <div>Use our ready-made proxy auto-config (PAC): it keeps <span class="mono">.fips</span> sites direct and sends
 the Internet through the exit, with <em>remote DNS</em> on (which is what lets <span class="mono">.onion</span>
 work and avoids DNS leaks).
-{{if .PacURL}}
-<p style="margin:.5rem 0 .2rem"><strong>Your PAC URL:</strong> <a href="{{.PacURL}}" class="mono">{{.PacURL}}</a></p>
+{{if .PacClearURL}}
+<p style="margin:.5rem 0 .2rem">There's a config per profile — set one as your browser's <em>Automatic proxy
+configuration URL</em>, and switch by swapping it:</p>
 <ul style="margin:.2rem 0 0;padding-left:1.2rem">
-  <li><strong>Firefox:</strong> Settings → Network Settings → <em>Automatic proxy configuration URL</em> → paste the PAC URL above.</li>
-  <li><strong>Chrome / Chromium:</strong> launch with <span class="mono">--proxy-pac-url=&lt;the PAC URL&gt;</span>.</li>
+  <li><strong>Connectivity</strong> (clearnet + <span class="mono">.onion</span>): <a href="{{.PacClearURL}}" class="mono">{{.PacClearURL}}</a></li>
+  {{if .PacPrivURL}}<li><strong>Privacy</strong> (all traffic through Tor): <a href="{{.PacPrivURL}}" class="mono">{{.PacPrivURL}}</a></li>{{end}}
 </ul>
-Both have proxy/remote DNS on by default.
+<p style="margin:.4rem 0 0">In Firefox: Settings → Network Settings → <em>Automatic proxy configuration URL</em>.
+In Chrome / Chromium: launch with <span class="mono">--proxy-pac-url=&lt;URL&gt;</span>. Both keep remote DNS on
+by default. You'll also find these on your <a href="/dashboard">dashboard</a>.</p>
 {{else}}
 Ask your operator for the PAC URL, then set it as your browser's automatic proxy configuration URL.
 {{end}}</div></details>

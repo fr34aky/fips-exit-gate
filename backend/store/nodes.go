@@ -84,19 +84,21 @@ func (s *Store) Heartbeat(ctx context.Context, nodeID, version string) ([]Servic
 	return s.Services(ctx)
 }
 
-// ServiceInfo is an enabled egress service as shown to customers (name + rate).
+// ServiceInfo is an enabled egress service as shown to customers (name, port, rate).
 type ServiceInfo struct {
 	Key     string
 	Name    string
+	Port    uint16
 	RatePPM int64
 }
 
-// EnabledServices returns the enabled egress services with their display name
-// and rate, for the portal's "how your data counts" explanation. Only services
-// actually enabled on this deployment appear, so the copy never overpromises.
+// EnabledServices returns the enabled egress services with their display name,
+// port, and rate, for the portal's "how your data counts" explanation and the
+// per-profile PAC files. Only services actually enabled on this deployment
+// appear, so the copy and the PAC links never overpromise.
 func (s *Store) EnabledServices(ctx context.Context) ([]ServiceInfo, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT key, name, rate_ppm FROM services WHERE enabled ORDER BY port`)
+		`SELECT key, name, port, rate_ppm FROM services WHERE enabled ORDER BY port`)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +106,7 @@ func (s *Store) EnabledServices(ctx context.Context) ([]ServiceInfo, error) {
 	var out []ServiceInfo
 	for rows.Next() {
 		var si ServiceInfo
-		if err := rows.Scan(&si.Key, &si.Name, &si.RatePPM); err != nil {
+		if err := rows.Scan(&si.Key, &si.Name, &si.Port, &si.RatePPM); err != nil {
 			return nil, err
 		}
 		out = append(out, si)

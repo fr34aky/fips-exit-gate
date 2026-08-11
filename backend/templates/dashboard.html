@@ -36,6 +36,27 @@
 <p class="muted">Total used so far: {{bytes .S.UsageBytes}}.</p>
 {{else}}<div class="card">No packages yet. <a href="/packages">Choose a package →</a></div>{{end}}
 
+{{if .PacClearURL}}
+<h2>Connect your browser</h2>
+<p class="muted">Paste one of these into your browser's <em>Automatic proxy configuration URL</em> (Firefox:
+Settings → Network Settings), or download and load it. Both keep <span class="mono">.fips</span> sites direct
+and send the Internet through the exit — switch profiles by swapping the URL.</p>
+<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+  <div><div><strong>Connectivity</strong> <span class="muted">— clearnet + .onion, standard rate</span></div>
+    <div class="mono muted" style="font-size:.85em">{{.PacClearURL}}</div></div>
+  <a href="{{.PacClearURL}}" download="proxy-clear.pac"><button class="ghost">Download</button></a>
+</div></div>
+{{if .PacPrivURL}}
+<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+  <div><div><strong>Privacy</strong> <span class="muted">— all traffic via Tor, higher rate</span></div>
+    <div class="mono muted" style="font-size:.85em">{{.PacPrivURL}}</div></div>
+  <a href="{{.PacPrivURL}}" download="proxy-priv.pac"><button class="ghost">Download</button></a>
+</div></div>
+{{end}}
+<p class="muted">Using the URL (not a downloaded copy) means updates apply automatically. More in the
+<a href="/help">help &amp; FAQ</a>.</p>
+{{end}}
+
 {{if .S.Services}}
 <h2>Where your data went</h2>
 <p class="muted">One shared balance, metered per service at its own rate (e.g. Tor privacy costs a little more per
