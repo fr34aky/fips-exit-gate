@@ -2,26 +2,29 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Buy data · fips-exit</title>{{template "styles" .}}</head><body><main>
 <div class="row" style="justify-content:space-between">
-  <h1 style="margin:0">Buy data</h1>
+  <h1 style="margin:0">Choose a package</h1>
   <a href="/dashboard"><button class="ghost">Back</button></a>
 </div>
+<p class="muted">Pick a bundle below. It's tied to your nostr identity and shared across any devices you
+whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 
-{{if .Pending}}<div class="card"><strong>Purchase recorded.</strong>
-  <p class="muted">It will activate automatically once paid. See <a href="/dashboard">your dashboard</a>
-  for pending payments.</p></div>{{end}}
+{{if .Pending}}<div class="banner warn"><strong>Purchase recorded — waiting for payment.</strong>
+  <p class="muted" style="margin:.3rem 0 0">It activates automatically once paid. Track it under
+  <a href="/dashboard">pending payments</a> on your dashboard.</p></div>{{end}}
 
 {{range .Packages}}
-<div class="card"><div class="row" style="justify-content:space-between">
+<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
   <div>
     <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} · {{end}}valid {{.ValidityDays}} day(s)</div>
+    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} of data · valid {{.ValidityDays}} days{{else}}Unlimited data · valid {{.ValidityDays}} days{{end}}</div>
   </div>
-  <div class="row">
-    <div class="pill">{{sats .PriceMsat}}</div>
-    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button>Buy</button></form>
+  <div class="row" style="align-items:center">
+    <div class="price">{{sats .PriceMsat}}</div>
+    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button class="btn-lg">Buy</button></form>
   </div>
 </div></div>
-{{else}}<div class="card">No packages available.</div>{{end}}
+{{else}}<div class="card">No packages available right now — please check back soon.</div>{{end}}
 
-<p class="muted">Payable in Bitcoin (on-chain), Lightning, and Monero.</p>
+<p class="muted center">Payment methods shown at checkout depend on this exit. Volume bundles are metered by
+data used; time passes give unlimited data until they expire.</p>
 </main></body></html>

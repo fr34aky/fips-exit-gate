@@ -1,15 +1,32 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Access · fips-exit</title>{{template "styles" .}}</head><body><main>
-<h1>fips-exit</h1>
-<div class="card">
-  <h2 style="margin-top:0">{{.Title}}</h2>
-  <p>{{.Message}}</p>
-  {{if .Addr}}<p class="muted mono">Source: {{.Addr}}</p>{{end}}
-  <p class="row">
-    <a href="/login"><button>Sign in</button></a>
-    {{if .Npub}}<a href="/login"><button class="ghost">Buy a package</button></a>{{end}}
-  </p>
+<title>Internet access · fips-exit</title>{{template "styles" .}}</head><body><main>
+
+<div class="hero">
+  <h1 class="logo">fips-exit</h1>
+  <p class="lead">Fast, private Internet access for the fips mesh.</p>
 </div>
-<p class="muted">Paid internet exit for the fips mesh. Packages are payable in Bitcoin, Lightning, and Monero.</p>
+
+<div class="banner{{if eq .Title "Out of data"}} warn{{end}}">
+  <h2>{{.Title}}</h2>
+  <p>{{.Message}}</p>
+  <p class="row">
+    <a href="/login"><button class="btn-lg">{{if .Npub}}Buy more data{{else}}Get online{{end}}</button></a>
+    {{if .Npub}}<a href="/dashboard"><button class="ghost">My account</button></a>{{end}}
+  </p>
+  {{if .Addr}}<p class="muted mono">Your fips address: {{.Addr}}</p>{{end}}
+</div>
+
+<div class="card">
+  <strong>What you get</strong>
+  <ul class="benefits">
+    <li>Browse the clear Internet at the exit's speed, with DNS resolved for you — no leaks.</li>
+    <li>Reach <span class="mono">.onion</span> sites on the very same connection, and switch to full Tor privacy when you want it.</li>
+    <li>No sign-up, no email, no password: your nostr identity <em>is</em> your account.</li>
+    <li>Share one package across your own devices by whitelisting their keys.</li>
+  </ul>
+</div>
+
+<p class="muted center">Access is prepaid by the data package tied to your nostr identity.
+Paid in Bitcoin — Lightning unlocks instantly.</p>
 </main></body></html>

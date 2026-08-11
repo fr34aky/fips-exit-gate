@@ -444,18 +444,18 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *portal) captive(w http.ResponseWriter, r *http.Request) {
-	data := map[string]any{"Title": "Sign in to continue", "Message": "This identity is not currently authorized for internet access."}
+	data := map[string]any{"Title": "Sign in to get online", "Message": "You're not signed in yet. Sign in with your nostr identity to buy access and start browsing."}
 	if addr, err := p.verifyCaptiveToken(r.URL.Query().Get("t")); err == nil {
 		data["Addr"] = addr.String()
 		if npub, err := p.store.NpubByAddr(r.Context(), addr); err == nil {
 			data["Npub"] = npub
 			if s, err := p.store.Summary(r.Context(), npub); err == nil && !anyActive(s) {
 				data["Title"] = "Out of data"
-				data["Message"] = "Your packages are exhausted or expired. Buy more to continue."
+				data["Message"] = "Your data package has run out or expired. Top up in a few taps and you'll be back online right away — Lightning payments unlock instantly."
 			}
 		} else {
-			data["Title"] = "Unknown identity"
-			data["Message"] = "We don't recognize this fips identity yet. Sign in to get started."
+			data["Title"] = "Welcome to fips-exit"
+			data["Message"] = "We don't recognize this fips identity yet. Sign in with your nostr key to get started — it only takes a moment."
 		}
 	}
 	p.render(w, "captive.html", data)

@@ -1,37 +1,48 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in · fips-exit</title>{{template "styles" .}}</head><body><main>
-<h1>fips-exit portal</h1>
-<p class="muted">Sign in with your nostr identity to manage your data packages and whitelist.</p>
 
-{{if .FipsHint}}<div class="card"><div class="row">
-  <div>You appear to be connecting over fips as<br><span class="mono">{{.FipsHint}}</span></div>
-  <form method="post" action="/auth/fips"><button>Continue as this identity</button></form>
-</div></div>{{else if .FipsSource}}<div class="card">
-  <div>You're connecting over fips. Enter your npub to continue — it's verified
-  against your fips source address, so no signature is needed.</div>
-  <form method="post" action="/auth/fips" style="margin-top:.5rem">
-    <p><input type="text" name="npub" placeholder="npub1…" required></p>
-    <p><input type="submit" value="Continue as this identity"></p>
+<div class="hero">
+  <h1 class="logo">fips-exit</h1>
+  <p class="lead">Sign in with your nostr identity — it's your account. No email, no password.</p>
+</div>
+
+{{if .FipsHint}}<div class="banner good">
+  <span class="step">Fastest — you're on fips</span>
+  <p style="margin:.35rem 0 .6rem">We recognize you as<br><span class="mono">{{.FipsHint}}</span>.
+  No signature needed — your fips address proves it's you.</p>
+  <form method="post" action="/auth/fips"><button class="btn-lg">Continue as this identity</button></form>
+</div>{{else if .FipsSource}}<div class="banner good">
+  <span class="step">Fastest — you're on fips</span>
+  <p style="margin:.35rem 0 .6rem">You're connecting over fips, so no signature is needed — just enter your
+  npub and we'll verify it against your fips address.</p>
+  <form method="post" action="/auth/fips" class="row">
+    <input type="text" name="npub" placeholder="npub1…" required style="flex:1;min-width:12rem">
+    <input type="submit" value="Continue">
   </form>
 </div>{{end}}
 
+<p class="muted center" style="margin:1.5rem 0 .25rem">— or sign in with a nostr signer —</p>
+
 <div class="card">
-  <h2 style="margin-top:0">Nostr extension (NIP-07)</h2>
-  <p class="muted">Uses a browser signer such as nos2x or Alby.</p>
+  <h2 style="margin-top:0">Browser extension</h2>
+  <p class="muted">Desktop signers like nos2x or Alby (NIP-07). One click, nothing to copy.</p>
   <button id="nip07">Sign in with extension</button>
   <p id="err" class="err"></p>
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">Paste a signed event</h2>
-  <p class="muted">Any signer (incl. Amber): sign an event whose <span class="mono">challenge</span> tag is
-  <span class="mono" id="chal">…</span> and paste the event JSON here.</p>
+  <h2 style="margin-top:0">Mobile signer (Amber) or paste</h2>
+  <p class="muted">On Android with <strong>Amber</strong>, or any nostr signer: sign an event whose
+  <span class="mono">challenge</span> tag is <span class="mono" id="chal">…</span> and paste the signed
+  event JSON below.</p>
   <form method="post" action="/auth/verify" id="manual">
     <textarea name="event" placeholder='{"kind":27235,"created_at":...,"tags":[["challenge","..."]],"content":"","pubkey":"...","id":"...","sig":"..."}'></textarea>
     <p><input type="submit" value="Sign in"></p>
   </form>
 </div>
+
+<p class="muted center">New here? Your nostr key is all you need — sign in, then choose a data package.</p>
 
 <script>
 async function getChallenge() {
