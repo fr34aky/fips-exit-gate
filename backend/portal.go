@@ -487,6 +487,10 @@ func (p *portal) transparentNpub(r *http.Request) (string, bool) {
 
 func (p *portal) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Portal pages are dynamic and per-session; never let a browser (or the
+	// captive bounce) serve a stale copy — otherwise customers see old copy,
+	// prices, or account state after an update.
+	w.Header().Set("Cache-Control", "no-store")
 	if err := p.tmpl.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
