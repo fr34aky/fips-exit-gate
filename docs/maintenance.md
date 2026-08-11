@@ -44,7 +44,7 @@ may use any node).
 1. Issue an enroll token: `POST /admin/enroll-token`.
 2. On the new host, follow [Installation §3](install.md#3-exit-node) with that
    token and the node's own `EXIT_FIPS_ADDR` / `EXTERNAL_IF`.
-3. It appears after `docker logs deploy-agent-1` shows `enrolled as node <id>`.
+3. It appears after `docker logs fips-exit-agent-1` shows `enrolled as node <id>`.
 
 ## Add an egress service (e.g. a second exit layer)
 
@@ -87,7 +87,7 @@ gate/catalog entry, since it's still one port at one rate. See
 | `CHALLENGE_SECRET` | Change + restart; in-flight login challenges are voided. |
 | `CAPTIVE_TOKEN_SECRET` | Change on **both** the backend and **every** exit node's captive daemon, then restart both. In-flight captive tokens are voided. |
 | `BTCPAY_WEBHOOK_SECRET` | Update in the BTCPay store webhook **and** `backend.env`, restart the backend. |
-| Node identity | Re-enroll the node (new token + wipe `deploy_agent-state`) — see [Troubleshooting](troubleshooting.md#agent-401--unknown-node-after-a-backend-reset). |
+| Node identity | Re-enroll the node (new token + wipe `fips-exit_agent-state`) — see [Troubleshooting](troubleshooting.md#agent-401--unknown-node-after-a-backend-reset). |
 
 ## Back up & restore Postgres
 

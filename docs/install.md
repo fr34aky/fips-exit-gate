@@ -163,7 +163,7 @@ Load the nftables gate, then start the stack **with the agent profile**:
 set -a; . ./.env; set +a
 sudo -E ./up.sh up                                   # renders + validates + loads nftables, starts exit+captive+unbound
 docker compose --profile agent up -d --build agent   # start the agent
-docker logs deploy-agent-1 | tail                    # -> "enrolled as node <id>"
+docker logs fips-exit-agent-1 | tail                    # -> "enrolled as node <id>"
 ```
 
 `up.sh` runs `nft -c -f` before touching the live ruleset, so a malformed gate

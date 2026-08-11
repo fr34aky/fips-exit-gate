@@ -7,7 +7,7 @@ First, a quick health sweep:
 ```sh
 # Exit node
 docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'exit|captive|agent'
-docker logs deploy-agent-1 | tail                       # "enrolled as node <id>"
+docker logs fips-exit-agent-1 | tail                       # "enrolled as node <id>"
 sudo nft list set inet fips_exit authorized             # who is authorized in-kernel
 # Backend
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/authz    # who SHOULD be authorized
@@ -38,7 +38,7 @@ there, the backend doesn't consider it authorized.
 
 **Cause 2 — agent not syncing.** `/admin/authz` lists the address but
 `nft list set … authorized` doesn't.
-**Fix:** check `docker logs deploy-agent-1`. If it shows `401`/auth errors, see
+**Fix:** check `docker logs fips-exit-agent-1`. If it shows `401`/auth errors, see
 *Agent 401 after a backend reset* below. Otherwise confirm
 `FIPS_AGENT_BACKEND_URL` is reachable from the node.
 
@@ -130,9 +130,9 @@ agent still holds its old node id + token in durable state, so every call 401s.
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -XPOST $URL/admin/enroll-token -d '{}'   # new token
 # set FIPS_AGENT_ENROLL_TOKEN=<new> in deploy/.env, then:
 docker compose -f deploy/docker-compose.yaml --profile agent rm -sf agent
-docker volume rm deploy_agent-state
+docker volume rm fips-exit_agent-state
 docker compose -f deploy/docker-compose.yaml --profile agent up -d agent
-docker logs deploy-agent-1 | tail       # "enrolled as node <new id>"
+docker logs fips-exit-agent-1 | tail       # "enrolled as node <new id>"
 ```
 
 ## Agent (or captive) image fails to build
