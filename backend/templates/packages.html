@@ -16,7 +16,7 @@ whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
   <div>
     <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} of data · valid {{.ValidityDays}} days{{else}}Unlimited data · valid {{.ValidityDays}} days{{end}}</div>
+    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} of data{{else}}Unlimited data{{end}} · valid {{.ValidityDays}} day{{if ne .ValidityDays 1}}s{{end}}</div>
   </div>
   <div class="row" style="align-items:center">
     <div class="price">{{sats .PriceMsat}}</div>
