@@ -26,9 +26,10 @@
 {{if .S.Entitlements}}
 <table><thead><tr><th>Package</th><th>Remaining</th><th>Expires</th><th>Status</th></tr></thead><tbody>
 {{range .S.Entitlements}}<tr>
-  <td>{{if eq .Kind "volume"}}Data bundle{{else}}Time pass{{end}}</td>
+  <td><div>{{if .Name}}{{.Name}}{{else}}{{if eq .Kind "volume"}}Data bundle{{else}}Time pass{{end}}{{end}}</div>
+    <div class="muted" style="font-size:.82em">bought {{.StartsAt.Format "2 Jan 2006"}}</div></td>
   <td>{{if eq .Kind "volume"}}{{bytes .Remaining}} <span class="muted">of {{bytes .VolumeBytes}}</span>{{else}}<span class="muted">Unlimited</span>{{end}}</td>
-  <td>{{.ExpiresAt.Format "2 Jan 2006"}}</td>
+  <td>{{.ExpiresAt.Format "2 Jan 2006, 15:04"}}</td>
   <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">used up / expired</span>{{end}}</td>
 </tr>{{end}}
 </tbody></table>

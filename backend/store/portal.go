@@ -9,8 +9,10 @@ import (
 // EntitlementView is one entitlement as shown in the portal.
 type EntitlementView struct {
 	Kind        string
+	Name        string // catalog package name; "" for admin-credited grants (no purchase)
 	VolumeBytes int64
 	VolumeUsed  int64
+	StartsAt    time.Time
 	ExpiresAt   time.Time
 	Active      bool
 }
@@ -108,16 +110,20 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	out := AccountSummary{Account: acct}
 
 	entRows, err := s.pool.Query(ctx,
-		`SELECT kind, COALESCE(volume_bytes, 0), volume_used, expires_at,
-		        (now() >= starts_at AND now() <= expires_at
-		         AND (kind = 'time' OR volume_used < volume_bytes)) AS active
-		 FROM entitlements WHERE account_id = $1 ORDER BY expires_at`, acct.ID)
+		`SELECT e.kind, COALESCE(pt.name, ''), COALESCE(e.volume_bytes, 0), e.volume_used,
+		        e.starts_at, e.expires_at,
+		        (now() >= e.starts_at AND now() <= e.expires_at
+		         AND (e.kind = 'time' OR e.volume_used < e.volume_bytes)) AS active
+		 FROM entitlements e
+		 LEFT JOIN purchases p ON p.id = e.purchase_id
+		 LEFT JOIN package_types pt ON pt.id = p.package_type_id
+		 WHERE e.account_id = $1 ORDER BY e.expires_at`, acct.ID)
 	if err != nil {
 		return out, err
 	}
 	for entRows.Next() {
 		var e EntitlementView
-		if err := entRows.Scan(&e.Kind, &e.VolumeBytes, &e.VolumeUsed, &e.ExpiresAt, &e.Active); err != nil {
+		if err := entRows.Scan(&e.Kind, &e.Name, &e.VolumeBytes, &e.VolumeUsed, &e.StartsAt, &e.ExpiresAt, &e.Active); err != nil {
 			entRows.Close()
 			return out, err
 		}
