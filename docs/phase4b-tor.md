@@ -104,3 +104,8 @@ exactly like `:1080`.
 The same three steps with a different key/port/rate (e.g. a second exit layer on
 `:1082`). Nothing in the gate, captive, agent, or billing path changes — that
 invariance is the deliverable this phase verifies.
+
+For a *different* axis — reaching more networks over the **same** port rather
+than adding a port — see [Phase 4c — Connectivity](connectivity.md), which turns
+`:1080` into a clearnet + `.onion` dispatcher while `:1081` here stays the
+force-all-through-Tor privacy rail.

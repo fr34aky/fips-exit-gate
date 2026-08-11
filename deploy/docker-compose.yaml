@@ -27,6 +27,9 @@ services:
     volumes:
       - ./unbound.conf:/etc/unbound/unbound.conf:ro
 
+  # Clearnet egress engine. No longer client-facing: the dispatcher owns the
+  # connectivity port on the fips address and forwards non-onion CONNECTs here
+  # over loopback. Dante still enforces the full egress policy on every request.
   exit-clearnet:
     build: ../exit
     image: fips-exit/clearnet:dev
@@ -39,8 +42,29 @@ services:
       FIPS_IF: ${FIPS_IF:?set FIPS_IF}
       EXIT_FIPS_ADDR: ${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}
       EXTERNAL_IF: ${EXTERNAL_IF:?set EXTERNAL_IF}
-      CLEARNET_PORT: ${CLEARNET_PORT:-1080}
+      # Loopback bind + port: reached only by the local dispatcher, never fips.
+      CLEARNET_BIND: ${CLEARNET_BIND:-127.0.0.1}
+      CLEARNET_PORT: ${CLEARNET_PORT:-1090}
       WORKERS: ${WORKERS:-4}
+
+  # Connectivity dispatcher (Phase 4c): the client-facing SOCKS endpoint on the
+  # connectivity port. Routes by destination — *.onion to Tor's loopback
+  # SocksPort, everything else to Dante over loopback. One gated, metered port
+  # at one rate, so the gate/agent/billing are unchanged. Onion routing needs
+  # the `tor` profile running (the same Tor that powers the :1081 privacy rail);
+  # without it, clearnet still works and .onion returns a SOCKS error.
+  dispatch:
+    build:
+      context: ..
+      dockerfile: dispatch/Dockerfile
+    image: fips-exit/dispatch:dev
+    network_mode: host
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DISPATCH_LISTEN: "[${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}]:${CONNECTIVITY_PORT:-1080}"
+      DISPATCH_CLEARNET_UPSTREAM: "127.0.0.1:${CLEARNET_PORT:-1090}"
+      DISPATCH_TOR_UPSTREAM: "127.0.0.1:${TOR_DISPATCH_PORT:-9052}"
     volumes:
       # Bind the config so edits don't require an image rebuild.
       - ../exit/sockd.conf:/srv/sockd.conf:ro
@@ -58,8 +82,17 @@ services:
     restart: unless-stopped
     entrypoint: ["tor"]
     command:
+      # Privacy rail (:1081): fips clients force ALL traffic through Tor.
       - "--SocksPort"
       - "[${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}]:${TOR_PORT:-1081}"
+      # Loopback SocksPort for the connectivity dispatcher's *.onion path only.
+      # Reachable only from the local host; never bound on fips/public.
+      - "--SocksPort"
+      - "127.0.0.1:${TOR_DISPATCH_PORT:-9052}"
+      # Source policy (first match wins): the local dispatcher, then fips
+      # clients, then reject everything else.
+      - "--SocksPolicy"
+      - "accept 127.0.0.1"
       - "--SocksPolicy"
       - "accept [fd00::]/8"
       - "--SocksPolicy"
