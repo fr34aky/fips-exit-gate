@@ -103,6 +103,16 @@ services:
       # (ClientRejectInternalAddresses 1), so clients cannot re-enter fips.
     volumes:
       - tor-data:/var/lib/tor
+    healthcheck:
+      # The image's default healthcheck probes Tor's default :9050 SocksPort,
+      # which we don't expose (we bind :1081 + the loopback dispatch port), so it
+      # always reads "unhealthy". Probe the loopback dispatch SocksPort instead —
+      # "healthy" then genuinely means Tor egress works.
+      test: ["CMD", "curl", "-sf", "--socks5-hostname", "127.0.0.1:${TOR_DISPATCH_PORT:-9052}", "https://check.torproject.org/api/ip"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
 
   captive:
     build:
