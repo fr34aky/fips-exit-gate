@@ -26,7 +26,8 @@ curl -H "$H" -XPOST $URL/admin/packages   -d '{"kind":"time","name":"1 day pass 
 curl -H "$H" -XDELETE $URL/admin/packages/<id>   # deactivate a package (leaves the catalog; existing purchases unaffected)
 # Replace the whole catalog at once: deploy/apply-catalog.sh  (URL=... ADMIN_TOKEN=... sh deploy/apply-catalog.sh)
 curl -H "$H"        $URL/admin/services
-curl -H "$H" -XPOST $URL/admin/services   -d '{"key":"tor","name":"Tor","port":1081,"rate_ppm":1500000}'
+curl -H "$H" -XPOST $URL/admin/services   -d '{"key":"tor","name":"Tor","port":1081,"rate_ppm":1500000}'        # Privacy rail (1.5x)
+curl -H "$H" -XPOST $URL/admin/services   -d '{"key":"clearnet","name":"Connectivity","port":1080,"rate_ppm":1000000}'  # rename/retune the connectivity service (key stays clearnet)
 
 # Payments
 curl -H "$H" -XPOST $URL/admin/settle     -d '{"purchase_id":"..."}'   # manual settle (same seam the webhook uses)
@@ -60,6 +61,11 @@ only when an authorized-only endpoint is actually listening there):
 
 See the [Tor egress runbook](phase4b-tor.md) for the worked example. To retire a
 service, reverse all three (disable the catalog row with `"enabled":false`).
+
+To reach **more networks over the same port** (e.g. clearnet + `.onion` on
+`:1080`) rather than adding a port, that's the connectivity dispatcher — no new
+gate/catalog entry, since it's still one port at one rate. See
+[Connectivity](connectivity.md).
 
 ## Revoke or suspend access
 
@@ -108,8 +114,8 @@ git pull
 # Backend host:
 docker compose -f deploy/backend-compose.yaml up -d --build   # migrations auto-apply on start
 # Each exit node:
-cd deploy && sudo -E ./up.sh reload                            # re-render the gate if services.conf changed
-docker compose --profile agent up -d --build                  # rebuild exit/captive/agent
+cd deploy && sudo -E ./up.sh reload                            # re-render the gate ONLY if services.conf changed
+docker compose --profile agent --profile tor up -d --build     # rebuild dispatch/exit/captive/agent (+tor for .onion & the privacy rail)
 ```
 
 The agent and backend speak a versioned API and the agent tolerates brief
@@ -137,7 +143,8 @@ Then rebuild the exit image (`docker compose up -d --build exit-clearnet`).
   shows per-service consumption. The shared balance decrements by
   `bytes × rate_ppm / 1e6`.
 - **Privacy:** keep Dante logging minimal in production — retain per-account
-  byte totals, **not** destinations. The design never needs destination logs.
+  byte totals, **not** destinations. The dispatcher likewise never logs
+  destinations. The design never needs destination logs.
 - **Agent state:** `FIPS_AGENT_STATE_DIR` (`identity.json` 0600 +
   `runtime.json`) survives restarts without double-counting or losing bytes;
   back it up if you want node identity to survive a host rebuild (otherwise just

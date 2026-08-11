@@ -11,16 +11,17 @@ Internet over the host's public IPv4/IPv6, resolves DNS server-side, and meters
 usage against **prepaid data packages** bought with Bitcoin, Lightning, or
 Monero. Unknown or out-of-quota clients are redirected to a self-service portal
 where they log in with their nostr identity and buy access. Egress is
-**modular**: clearnet (Dante) and Tor are each a SOCKS endpoint on their own
-port behind one shared gate and one shared balance, metered at a per-service
-rate.
+**modular**, offered as per-port services behind one shared gate and one shared
+balance, each metered at its own rate: **Connectivity** (`:1080`) reaches
+clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
+(`:1081`) forces all traffic through Tor.
 
 ```
  fips client (IPv6 = f(npub))
-        │ SOCKS5 :1080 (clearnet) / :1081 (Tor)  over the fips interface
+        │ SOCKS5 :1080 (connectivity: clearnet + .onion) / :1081 (privacy: Tor)
         ▼
 ┌─ Exit node (a normal fips participant) ─────────────────────────┐
-│  nftables gate ── src ∈ authorized ─▶ Dante / Tor ─▶ Internet   │
+│  nftables gate ── src ∈ authorized ─▶ dispatch / Tor ─▶ Internet│
 │       │            else ─▶ captive daemon ─▶ 302 to the portal   │
 │       └─ per-(client,service) byte counters                     │
 │  exit-agent ── syncs the authorized set ↓ / reports usage ↑     │
@@ -40,7 +41,8 @@ rate.
 | Path | Purpose |
 |---|---|
 | `pkg/fipsaddr` | The identity primitive: npub → fips IPv6 address derivation (`0xfd ‖ SHA-256(pubkey)[0:15]`), stdlib-only, shared by every component. |
-| `exit/` | The clearnet egress: a **Dante** `sockd` SOCKS5 server built from source, bound to the fips interface, egress-only (blocks fd00::/8, RFC1918, loopback, metadata) with credential-free source-address auth. |
+| `exit/` | The clearnet egress engine: a **Dante** `sockd` SOCKS5 server built from source, egress-only (blocks fd00::/8, RFC1918, loopback, metadata) with credential-free source-address auth. Now listens on loopback behind the dispatcher. |
+| `dispatch/` | The connectivity dispatcher: the client-facing SOCKS endpoint on `:1080` that routes each CONNECT by destination — `*.onion` → Tor, everything else → Dante over loopback. No egress policy of its own; never logs destinations. |
 | `captive/` | The captive daemon: a minimal SOCKS5 server that answers **unauthorized** clients with an HTTP `302` to the portal (carrying a signed token) and cleanly refuses everything else. |
 | `agent/` | The exit-node agent: reconciles the nftables `authorized` set from the backend (long-poll), reads the per-`(client,service)` byte counters, reports usage, and enforces quota cutoffs. Drives `nft`; otherwise stdlib-only (portable to OpenWrt). |
 | `backend/` | The control plane + user portal (Go + Postgres): the agent-facing API (enroll / authz / usage), nostr login (NIP-07 + transparent fips-source), the package catalog, whitelist management, and the BTCPay payment webhook. |
@@ -57,7 +59,7 @@ rate.
 | **unbound** | Server-side DNS resolver so clients can send hostnames and leak no DNS locally. |
 | **Postgres** | The backend's data store: accounts, entitlements, usage ledger, the materialized authorized set + revision log. |
 | **BTCPay Server** (+ Monero plugin) | Self-hosted payments, wired to the operator's **external** bitcoind/monerod over Tor; issues invoices and signs the settlement webhook. |
-| **Tor** | An optional second egress service (`:1081`) — the modularity proof — and the transport BTCPay uses to reach the external nodes. |
+| **Tor** | Powers two things: the **Privacy** rail (`:1081`, all traffic forced through Tor) and the dispatcher's `.onion` route on the **Connectivity** port (`:1080`); also the transport BTCPay uses to reach the external nodes. |
 | **nostr** (Schnorr / `btcec`) | The identity layer: npubs derive fips addresses and sign portal logins (NIP-07 / any signer). |
 
 ## How access works
@@ -83,7 +85,9 @@ and never metered.
 - **[Hardening](docs/hardening.md)** — egress abuse policy, per-account ceilings, logging/privacy.
 - **[Testing payments](docs/testing-payments.md)** — run the BTCPay, phoenixd, and Cashu fakes to exercise payments with no real node, mint, or channel.
 
-Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/api-agent-backend.md) · [data model](docs/data-model.md) · [threat model](docs/threat-model.md) · [security review](docs/security-review.md) · payments: [BTCPay](docs/phase4-btcpay.md) · [phoenixd (Lightning)](docs/phoenixd.md) · [Tor egress](docs/phase4b-tor.md).
+Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md).
+
+Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/api-agent-backend.md) · [data model](docs/data-model.md) · [threat model](docs/threat-model.md) · [security review](docs/security-review.md) · payments: [BTCPay](docs/phase4-btcpay.md) · [phoenixd (Lightning)](docs/phoenixd.md).
 
 ## Development
 

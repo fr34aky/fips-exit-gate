@@ -17,8 +17,8 @@ up everything *except* real payments and uses admin credits to grant access.
 Backend host                         Exit node (a fips participant)
 ┌──────────────────────────┐         ┌────────────────────────────────┐
 │ Postgres                 │◀── API ─│ exit-agent                     │
-│ backend (API + portal)   │         │ Dante (:1080) + captive (:1088)│
-│ [BTCPay + Tor, optional] │         │ unbound · nftables gate        │
+│ backend (API + portal)   │         │ dispatch(:1080)·captive(:1088) │
+│ [BTCPay + Tor, optional] │         │ Dante/Tor(lo)·unbound·nft gate │
 └──────────────────────────┘         └────────────────────────────────┘
 ```
 
@@ -54,8 +54,8 @@ git clone https://github.com/fr34aky/fips-exit-gate && cd fips-exit-gate
 ## 1. Backend host
 
 The backend serves the agent API, the portal, and admin endpoints, backed by
-Postgres. Migrations run and the `clearnet` service + default package catalog
-are seeded automatically on first start.
+Postgres. Migrations run and the connectivity service (key `clearnet`, displayed
+"Connectivity") + default package catalog are seeded automatically on first start.
 
 ```sh
 cd deploy
@@ -193,13 +193,16 @@ peer** whose npub you credited (not the exit host itself — see
 
 ```sh
 EXIT=<EXIT_FIPS_ADDR>
-curl --socks5-hostname "[$EXIT]:1080" https://ifconfig.co      # -> the exit's public IP
+curl --socks5-hostname "[$EXIT]:1080" https://ifconfig.co      # connectivity -> the exit's public IP
 curl --socks5-hostname "[$EXIT]:1080" http://example.com -D -  # unauthorized client -> HTTP 302 to portal
 ```
 
-You now have a working exit. To let users **buy** access instead of admin
-credits, configure a payment rail (**§6** below); to add the **Tor** egress
-service, see [the Tor runbook](phase4b-tor.md).
+`:1080` is the **connectivity** service — clearnet, plus `.onion` when the exit
+runs the `tor` profile (the dispatcher routes `*.onion` to Tor). You now have a
+working exit. To let users **buy** access instead of admin credits, configure a
+payment rail (**§6** below); to enable `.onion` on `:1080` and/or the **Privacy**
+rail (`:1081`, all traffic through Tor), see [Connectivity](connectivity.md) and
+the [Tor runbook](phase4b-tor.md).
 
 ## 5. Portal login
 
@@ -278,11 +281,11 @@ Clients browse the Internet through the exit's SOCKS5 proxy while still reaching
 the fips mesh — the portal and every `.fips` service — natively. The repo ships
 a small **PAC** (proxy auto-config) template, [`deploy/fips.pac`](../deploy/fips.pac),
 that does exactly that split. Copy it and set `EXIT` to your exit node's
-**`<npub>.fips` name** and clearnet port:
+**`<npub>.fips` name** and connectivity port:
 
 ```js
 // deploy/fips.pac
-var EXIT = "npub1…exit-host-npub….fips:1080";  // exit's <npub>.fips : CLEARNET_PORT
+var EXIT = "npub1…exit-host-npub….fips:1080";  // exit's <npub>.fips : CONNECTIVITY_PORT
 ```
 
 Address the exit by its `<npub>.fips` name, **not** a raw `[fd..]` IPv6 literal:

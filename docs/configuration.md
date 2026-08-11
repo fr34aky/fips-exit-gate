@@ -82,9 +82,12 @@ captive containers.
 | `FIPS_IF` | `fips0` | fips TUN interface; the gate only touches traffic ingressing here. |
 | `EXIT_FIPS_ADDR` | `fd6b:b19b:6700:c923:df48:31a8:698b:bb25` | This node's fips address; services listen on it and the gate matches it. |
 | `EXTERNAL_IF` | `eth0` | Public egress interface (IPv4/IPv6) Dante exits from. |
-| `CLEARNET_PORT` | `1080` | Dante SOCKS port. |
+| `CONNECTIVITY_PORT` | `1080` | Client-facing **connectivity** port. The dispatcher listens here and routes `*.onion` → Tor, everything else → Dante. Gated + metered; keep in sync with `services.conf`. |
+| `CLEARNET_BIND` | `127.0.0.1` | Address Dante's `internal:` binds — **loopback**, reached only by the dispatcher (no longer client-facing). |
+| `CLEARNET_PORT` | `1090` | Dante's SOCKS port on `CLEARNET_BIND`; the dispatcher forwards clearnet CONNECTs here. |
 | `CAPTIVE_PORT` | `1088` | Captive daemon port (redirect target for unauthorized traffic). |
-| `TOR_PORT` | `1081` | Tor SOCKS port (only with `--profile tor`). |
+| `TOR_PORT` | `1081` | Tor SOCKS **privacy** rail — forces *all* traffic through Tor (only with `--profile tor`). |
+| `TOR_DISPATCH_PORT` | `9052` | Tor loopback SocksPort the dispatcher uses for the `*.onion` route (only with `--profile tor`). |
 | `WORKERS` | `4` | Dante worker processes. |
 | `CAPTIVE_PORTAL_URL` | `http://<npub>.fips:8080/captive` | Where the captive `302` sends unauthorized clients. Prefer the portal host's `<npub>.fips` URL (see note below). |
 | `CAPTIVE_TOKEN_SECRET` | (secret) | Signs the captive token. **Must equal the backend's value.** |
@@ -112,21 +115,45 @@ Read by `agent/` (see `agent/main.go`).
 The agent needs `CAP_NET_ADMIN` (it shells out to `nft`) — the compose service
 grants it; under systemd the unit does.
 
-## Exit / Dante container
+## Connectivity dispatcher
 
-Read by `exit/entrypoint.sh`. Under compose these come from `deploy/.env`.
+Read by `dispatch/`. The client-facing SOCKS endpoint on the connectivity port:
+it routes each CONNECT by destination — `*.onion` to Tor, everything else to
+Dante over loopback (which enforces the egress policy). It carries no egress
+policy of its own and never logs destinations. Under compose these come from
+`deploy/.env`. Full runbook: [Connectivity](connectivity.md).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FIPS_IF` | — | Interface Dante's `internal:` binds. |
+| `DISPATCH_LISTEN` | `[::1]:1080` | Client-facing listen address (compose sets `[EXIT_FIPS_ADDR]:CONNECTIVITY_PORT`). |
+| `DISPATCH_CLEARNET_UPSTREAM` | `127.0.0.1:1090` | Dante's loopback SOCKS (`CLEARNET_BIND:CLEARNET_PORT`) — the clearnet route. |
+| `DISPATCH_TOR_UPSTREAM` | `127.0.0.1:9052` | Tor's loopback SocksPort — the `*.onion` route. Empty = onion disabled (`.onion` refused; clearnet still works). |
+| `DISPATCH_ONION_SUFFIX` | `.onion` | Hostname suffix routed to Tor. |
+| `DISPATCH_DIAL_TIMEOUT_S` | `15` | Upstream dial timeout. |
+| `DISPATCH_HANDSHAKE_TIMEOUT_S` | `15` | SOCKS handshake deadline (cleared once the tunnel relays). |
+| `DISPATCH_MAX_CONNS` | `4096` | Max concurrent connections (load-shed beyond). |
+
+Onion routing needs the `tor` profile running (it provides `TOR_DISPATCH_PORT`);
+without it, clearnet still works and `.onion` returns a SOCKS host-unreachable.
+
+## Exit / Dante container
+
+Read by `exit/entrypoint.sh`. Under compose these come from `deploy/.env`.
+Dante is no longer client-facing — it listens on loopback behind the dispatcher.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FIPS_IF` | — | Required by `entrypoint.sh` (validated on start). |
+| `CLEARNET_BIND` | `127.0.0.1` | Address Dante's `internal:` binds — loopback, reached only by the dispatcher. |
+| `CLEARNET_PORT` | `1090` | Dante's SOCKS listen port on `CLEARNET_BIND`. |
 | `EXTERNAL_IF` | — | Interface Dante's `external:` egresses from. |
-| `CLEARNET_PORT` | `1080` | SOCKS listen port. |
 | `WORKERS` | `4` | `sockd` workers. |
 | `CONFIG` | `/etc/sockd.conf` | Dante config path (a symlink to `sockd.conf`). |
 
 `exit/sockd.conf` is the Dante policy: credential-free (`socksmethod: none`),
 connect-only, and it **blocks** fd00::/8, RFC1918, loopback, and metadata
-destinations. Edit it there; it's bind-mounted so no rebuild is needed.
+destinations. It binds `CLEARNET_BIND` (loopback) behind the dispatcher. Edit it
+there; it's bind-mounted so no rebuild is needed.
 
 ## Captive daemon
 
@@ -154,6 +181,10 @@ catalog row in the backend (`POST /admin/services`). Keep the three in sync.
 clearnet 1080
 # tor 1081        # uncomment together with `--profile tor` + the /admin/services row
 ```
+
+Port `1080` is the **connectivity** dispatcher endpoint (clearnet + `.onion`); the
+gate only sees the port, so the service key stays `clearnet` (display name
+"Connectivity"). See [Connectivity](connectivity.md).
 
 ### `deploy/allowlist.txt` — Phase-1 static authorization
 
@@ -185,7 +216,10 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" -XPOST $URL/admin/services \
 ```
 
 `rate_ppm` is parts-per-million (`1000000` = 1.0×). The shared balance is
-decremented by `bytes × rate_ppm / 1e6`. **Packages** (volume bundles + time
+decremented by `bytes × rate_ppm / 1e6`. The default `clearnet` service is
+displayed as **Connectivity** (its `:1080` dispatcher reaches clearnet + `.onion`
+at 1.0×); the optional `tor` service is the **Privacy** rail (`:1081`, forces all
+traffic through Tor, typically 1.5×). **Packages** (volume bundles + time
 passes) are managed via `/admin/packages`; a default catalog is seeded on first
 start. Prices are in **sats** (`price_sats`). A package may carry an
 `available_days` window (POST) to make it a **time-limited promo** — the catalog
