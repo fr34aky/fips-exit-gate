@@ -208,10 +208,8 @@ the [Tor runbook](phase4b-tor.md).
 
 Users manage their account and packages at `PORTAL_PUBLIC_URL`:
 
-- **Nostr signer** (from anywhere): "Sign in with extension" (NIP-07) on desktop;
-  on Android, one-tap **"Sign in with Amber"** (a NIP-55 `nostrsigner:` deep link —
-  opens Amber, you approve, and it redirects back to `/auth/amber` signed in); or
-  paste a signed event from any signer as a fallback.
+- **Nostr signer** (from anywhere): "Sign in with extension" (NIP-07), or paste
+  a signed event from any signer (incl. Amber).
 - **Transparent fips login** (over fips): **on by default** — when the backend
   listens on the fips interface with no proxy masking the source, the client's
   npub-derived address authenticates it with no signature. Requires the fips

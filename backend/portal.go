@@ -55,7 +55,6 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", p.loginPage)
 	mux.HandleFunc("GET /auth/challenge", p.authChallenge)
 	mux.HandleFunc("POST /auth/verify", p.authVerify)
-	mux.HandleFunc("GET /auth/amber", p.authAmber)
 	mux.HandleFunc("POST /auth/fips", p.authFips)
 	mux.HandleFunc("POST /auth/logout", p.logout)
 	mux.HandleFunc("GET /dashboard", p.dashboard)
@@ -218,9 +217,6 @@ func (p *portal) loginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{}
-	if r.URL.Query().Get("err") == "amber" {
-		data["Err"] = "Amber sign-in didn't complete — please try again, or paste a signed event below."
-	}
 	if npub, ok := p.transparentNpub(r); ok {
 		data["FipsHint"] = npub // known address — one-click continue
 	} else if p.fipsSource(r) {
@@ -264,9 +260,26 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	npub, msg := p.loginWithEvent(r, &ev)
-	if msg != "" {
-		p.authFail(w, jsonReq, msg)
+	npub, err := nostr.Verify(&ev)
+	if err != nil {
+		p.authFail(w, jsonReq, "signature did not verify")
+		return
+	}
+	if ev.Kind != nostr.AuthEventKind {
+		p.authFail(w, jsonReq, "wrong event kind")
+		return
+	}
+	now := time.Now().Unix()
+	if err := nostr.VerifyChallenge(p.challengeSecret, nostr.ExtractChallenge(&ev), now); err != nil {
+		p.authFail(w, jsonReq, "invalid or expired challenge")
+		return
+	}
+	if ev.CreatedAt < now-nostr.ChallengeTTLSeconds || ev.CreatedAt > now+60 {
+		p.authFail(w, jsonReq, "stale event")
+		return
+	}
+	if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+		p.authFail(w, jsonReq, "could not create account")
 		return
 	}
 	p.setSession(w, npub)
@@ -274,55 +287,6 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"redirect": "/dashboard"})
 		return
 	}
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
-}
-
-// loginWithEvent verifies a signed nostr auth event from any transport — the
-// JSON POST (extension), the form paste, or the Amber deep-link callback — and
-// creates/loads the account. Returns the npub, or a non-empty user-facing
-// message on failure.
-func (p *portal) loginWithEvent(r *http.Request, ev *nostr.Event) (string, string) {
-	npub, err := nostr.Verify(ev)
-	if err != nil {
-		return "", "signature did not verify"
-	}
-	if ev.Kind != nostr.AuthEventKind {
-		return "", "wrong event kind"
-	}
-	now := time.Now().Unix()
-	if err := nostr.VerifyChallenge(p.challengeSecret, nostr.ExtractChallenge(ev), now); err != nil {
-		return "", "invalid or expired challenge"
-	}
-	if ev.CreatedAt < now-nostr.ChallengeTTLSeconds || ev.CreatedAt > now+60 {
-		return "", "stale event"
-	}
-	if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
-		return "", "could not create account"
-	}
-	return npub, ""
-}
-
-// authAmber completes a NIP-55 (Amber) deep-link sign-in. The login page opens a
-// `nostrsigner:` URI; Amber signs the auth event on the user's own device and
-// redirects back here with ?event=<signed event JSON>. Verification is identical
-// to the paste/extension paths, so no new trust is introduced.
-func (p *portal) authAmber(w http.ResponseWriter, r *http.Request) {
-	raw := r.URL.Query().Get("event")
-	if raw == "" {
-		http.Redirect(w, r, "/login?err=amber", http.StatusSeeOther)
-		return
-	}
-	var ev nostr.Event
-	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-		http.Redirect(w, r, "/login?err=amber", http.StatusSeeOther)
-		return
-	}
-	npub, msg := p.loginWithEvent(r, &ev)
-	if msg != "" {
-		http.Redirect(w, r, "/login?err=amber", http.StatusSeeOther)
-		return
-	}
-	p.setSession(w, npub)
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
