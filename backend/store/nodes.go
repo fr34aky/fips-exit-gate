@@ -84,6 +84,34 @@ func (s *Store) Heartbeat(ctx context.Context, nodeID, version string) ([]Servic
 	return s.Services(ctx)
 }
 
+// ServiceInfo is an enabled egress service as shown to customers (name + rate).
+type ServiceInfo struct {
+	Key     string
+	Name    string
+	RatePPM int64
+}
+
+// EnabledServices returns the enabled egress services with their display name
+// and rate, for the portal's "how your data counts" explanation. Only services
+// actually enabled on this deployment appear, so the copy never overpromises.
+func (s *Store) EnabledServices(ctx context.Context) ([]ServiceInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT key, name, rate_ppm FROM services WHERE enabled ORDER BY port`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ServiceInfo
+	for rows.Next() {
+		var si ServiceInfo
+		if err := rows.Scan(&si.Key, &si.Name, &si.RatePPM); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
 // Services returns the enabled egress services.
 func (s *Store) Services(ctx context.Context) ([]Service, error) {
 	rows, err := s.pool.Query(ctx,

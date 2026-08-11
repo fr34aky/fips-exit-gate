@@ -61,6 +61,7 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /whitelist/add", p.whitelistAdd)
 	mux.HandleFunc("POST /whitelist/toggle", p.whitelistToggle)
 	mux.HandleFunc("GET /captive", p.captive)
+	mux.HandleFunc("GET /help", p.help)
 	mux.HandleFunc("GET /packages", p.packagesPage)
 	mux.HandleFunc("POST /buy", p.buy)
 	mux.HandleFunc("GET /pay/{id}", p.payPage)
@@ -379,7 +380,17 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error loading packages", http.StatusInternalServerError)
 		return
 	}
-	p.render(w, "packages.html", map[string]any{"Packages": pkgs, "Pending": r.URL.Query().Get("pending") != ""})
+	services, _ := p.store.EnabledServices(r.Context()) // non-fatal; the explainer is optional
+	p.render(w, "packages.html", map[string]any{
+		"Packages": pkgs, "Services": services, "Pending": r.URL.Query().Get("pending") != "",
+	})
+}
+
+// help serves the public FAQ / help page. No session required — it's linked from
+// the captive and login pages so a not-yet-signed-in visitor can read it.
+func (p *portal) help(w http.ResponseWriter, r *http.Request) {
+	services, _ := p.store.EnabledServices(r.Context())
+	p.render(w, "help.html", map[string]any{"Services": services})
 }
 
 func (p *portal) buy(w http.ResponseWriter, r *http.Request) {

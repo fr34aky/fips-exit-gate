@@ -35,4 +35,11 @@
   .tag { font-size:.74rem; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:.12rem .55rem; }
   .center { text-align:center; }
   .step { color:var(--muted); font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; font-weight:600; }
+  details.faq { border:1px solid var(--line); border-radius:10px; background:var(--card); margin:.5rem 0; }
+  details.faq > summary { cursor:pointer; padding:.75rem .95rem; font-weight:600; list-style:none; }
+  details.faq > summary::-webkit-details-marker { display:none; }
+  details.faq > summary::before { content:"+"; color:var(--accent); font-weight:700; margin-right:.55rem; display:inline-block; width:.7em; }
+  details.faq[open] > summary::before { content:"–"; }
+  details.faq > div { padding:0 .95rem .85rem; color:var(--muted); }
+  .pagenav { margin:2rem 0 .5rem; display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; font-size:.9rem; }
 </style>{{end}}

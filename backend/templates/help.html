@@ -1,0 +1,88 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Help & FAQ · fips-exit</title>{{template "styles" .}}</head><body><main>
+
+<div class="hero">
+  <h1 class="logo">Help &amp; FAQ</h1>
+  <p class="lead">Everything you need to know about getting online through the fips exit.</p>
+</div>
+
+<div class="banner good">
+  <span class="step">Get online in 3 steps</span>
+  <p style="margin:.4rem 0 0">1. Sign in with your nostr identity.&nbsp; 2. Choose a data package and pay.&nbsp;
+  3. Browse — you're connected.</p>
+</div>
+
+{{if .Services}}
+<h2>The two ways to connect</h2>
+<p class="muted">Both draw on the same package balance; they differ in how much of your data each byte of
+traffic uses.</p>
+{{range .Services}}
+<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+  <div>
+    <div><strong>{{.Name}}</strong></div>
+    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard, fastest way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network, so your traffic blends in with other Tor users. A little slower, and it uses more of your data.{{else}}Egress service.{{end}}</div>
+  </div>
+  <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
+</div></div>
+{{end}}
+<p class="muted">At 1.5×, 1&nbsp;GB of browsing counts as 1.5&nbsp;GB of your balance. Traffic that stays inside the
+fips mesh (<span class="mono">.fips</span> sites) goes direct and is never metered.</p>
+{{end}}
+
+<h2>Frequently asked</h2>
+
+<details class="faq"><summary>What is fips-exit?</summary>
+<div>A paid gateway that lets devices on the fips mesh reach the regular Internet. You buy a prepaid data
+package and browse through the exit; your nostr identity is your account.</div></details>
+
+<details class="faq"><summary>How do I sign in?</summary>
+<div>With your nostr identity — no email or password. If you're connecting over fips, you can usually just
+confirm your npub (it's verified against your fips address, no signature needed). Otherwise use a browser
+extension (NIP-07), or paste a signed event from any nostr signer.</div></details>
+
+<details class="faq"><summary>How is my data measured?</summary>
+<div>By the bytes that pass through the exit to the Internet, counted against your package. Different services
+count at different rates — see “The two ways to connect” above. Traffic that stays inside the fips mesh is
+never metered.</div></details>
+
+<details class="faq"><summary>What can I pay with?</summary>
+<div>Bitcoin. <strong>Lightning payments unlock access instantly.</strong> On-chain Bitcoin unlocks once the
+payment confirms (about one block). The exact methods offered appear at checkout.</div></details>
+
+<details class="faq"><summary>Can I use the same package on my other devices?</summary>
+<div>Yes. On your dashboard, add another device or person by their npub under “Shared access” — they’ll draw
+on the same balance. You can disable any of them at any time.</div></details>
+
+<details class="faq"><summary>Why did a sign-in page appear while I was browsing?</summary>
+<div>That’s the exit telling you it can’t let this traffic through yet — either you’re not signed in, or your
+package has run out or expired. Sign in and (if needed) top up, and you’ll be back online.</div></details>
+
+<details class="faq"><summary>Do I need to change any browser settings?</summary>
+<div>Point your browser’s SOCKS proxy at the exit and enable <em>remote DNS</em> (also called “proxy DNS”), so
+names are resolved at the exit — this is what lets <span class="mono">.onion</span> work and avoids DNS leaks.
+A small auto-config file (PAC) keeps <span class="mono">.fips</span> sites direct while sending the Internet
+through the exit. Ask your operator for it if you don’t have one.</div></details>
+
+<details class="faq"><summary>Can I reach .onion sites?</summary>
+<div>Yes — the Connectivity service reaches <span class="mono">.onion</span> addresses on the same connection,
+no extra setup. For full anonymity for <em>all</em> your traffic, use the Privacy service.</div></details>
+
+<details class="faq"><summary>Do you log what I visit?</summary>
+<div>No. The exit does not log destinations — only per-account byte totals needed for billing. Your browsing
+history isn’t recorded.</div></details>
+
+<details class="faq"><summary>What happens when my data runs out or my pass expires?</summary>
+<div>Access stops and you’ll see the sign-in/top-up page again. Buy another package to continue — Lightning
+gets you back online immediately.</div></details>
+
+<details class="faq"><summary>I paid but I’m still not online.</summary>
+<div>Lightning is instant; on-chain Bitcoin needs a confirmation first. Check “Pending payments” on your
+dashboard — it shows whether a payment is still confirming.</div></details>
+
+<div class="pagenav">
+  <a href="/login">Sign in</a>
+  <a href="/packages">Buy data</a>
+  <a href="/dashboard">My account</a>
+</div>
+</main></body></html>

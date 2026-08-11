@@ -3,7 +3,8 @@
 <title>Buy data · fips-exit</title>{{template "styles" .}}</head><body><main>
 <div class="row" style="justify-content:space-between">
   <h1 style="margin:0">Choose a package</h1>
-  <a href="/dashboard"><button class="ghost">Back</button></a>
+  <div class="row"><a href="/help"><button class="ghost">Help</button></a>
+    <a href="/dashboard"><button class="ghost">Back</button></a></div>
 </div>
 <p class="muted">Pick a bundle below. It's tied to your nostr identity and shared across any devices you
 whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
@@ -24,6 +25,23 @@ whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
   </div>
 </div></div>
 {{else}}<div class="card">No packages available right now — please check back soon.</div>{{end}}
+
+{{if .Services}}
+<h2>How your data is counted</h2>
+<p class="muted">Your package is one shared balance. How fast it's used depends on which service you connect
+through — each counts your traffic at its own rate.</p>
+{{range .Services}}
+<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+  <div>
+    <div><strong>{{.Name}}</strong></div>
+    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else}}Egress service.{{end}}</div>
+  </div>
+  <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
+</div></div>
+{{end}}
+<p class="muted">A higher rate means the same traffic uses more of your balance — e.g. at 1.5×, 1&nbsp;GB of
+browsing counts as 1.5&nbsp;GB. More in the <a href="/help">help &amp; FAQ</a>.</p>
+{{end}}
 
 <p class="muted center">Payment methods shown at checkout depend on this exit. Volume bundles are metered by
 data used; time passes give unlimited data until they expire.</p>
