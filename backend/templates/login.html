@@ -7,6 +7,8 @@
   <p class="lead">Sign in with your nostr identity — it's your account. No email, no password.</p>
 </div>
 
+{{if .Err}}<div class="banner warn"><p style="margin:0">{{.Err}}</p></div>{{end}}
+
 {{if .FipsHint}}<div class="banner good">
   <span class="step">Fastest — you're on fips</span>
   <p style="margin:.35rem 0 .6rem">We recognize you as<br><span class="mono">{{.FipsHint}}</span>.
@@ -32,8 +34,12 @@
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">Mobile signer (Amber) or paste</h2>
-  <p class="muted">On Android with <strong>Amber</strong>, or any nostr signer: sign an event whose
+  <h2 style="margin-top:0">Amber (Android)</h2>
+  <p class="muted">Tap to sign in with <strong>Amber</strong> — it opens the app, you approve, and you're
+  brought back automatically. Nothing to copy.</p>
+  <p><button type="button" id="amber">Sign in with Amber</button></p>
+  <p id="amberErr" class="err"></p>
+  <p class="muted" style="margin-top:1.1rem">No Amber? Any nostr signer works: sign an event whose
   <span class="mono">challenge</span> tag is <span class="mono" id="chal">…</span> and paste the signed
   event JSON below.</p>
   <form method="post" action="/auth/verify" id="manual">
@@ -50,16 +56,18 @@ async function getChallenge() {
   document.getElementById('chal').textContent = j.challenge;
   return j.challenge;
 }
+function unsignedAuth(challenge) {
+  return { kind: 27235, created_at: Math.floor(Date.now()/1000),
+    tags: [['challenge', challenge]], content: '' };
+}
 let challengePromise = getChallenge();
+
 document.getElementById('nip07').addEventListener('click', async () => {
   const err = document.getElementById('err'); err.textContent = '';
   try {
     if (!window.nostr) throw new Error('No NIP-07 extension found');
     const challenge = await challengePromise;
-    const ev = await window.nostr.signEvent({
-      kind: 27235, created_at: Math.floor(Date.now()/1000),
-      tags: [['challenge', challenge]], content: ''
-    });
+    const ev = await window.nostr.signEvent(unsignedAuth(challenge));
     const r = await fetch('/auth/verify', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event: ev})
     });
@@ -67,6 +75,19 @@ document.getElementById('nip07').addEventListener('click', async () => {
     const j = await r.json();
     if (j.redirect) location.href = j.redirect; else err.textContent = j.error || 'Sign-in failed';
   } catch (e) { err.textContent = e.message; }
+});
+
+// Amber (NIP-55) deep link: hand the unsigned auth event to the signer app and
+// have it redirect back to /auth/amber with the signed event. Fetch a fresh
+// challenge on tap so the app-switch round-trip stays within its TTL.
+document.getElementById('amber').addEventListener('click', async () => {
+  const err = document.getElementById('amberErr'); err.textContent = '';
+  try {
+    const challenge = await getChallenge();
+    const cb = location.origin + '/auth/amber?event=';
+    location.href = 'nostrsigner:' + encodeURIComponent(JSON.stringify(unsignedAuth(challenge)))
+      + '?compressionType=none&returnType=event&type=sign_event&callbackUrl=' + encodeURIComponent(cb);
+  } catch (e) { err.textContent = 'Could not start Amber sign-in: ' + e.message; }
 });
 </script>
 </main></body></html>
