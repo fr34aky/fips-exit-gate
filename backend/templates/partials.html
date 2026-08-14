@@ -1,45 +1,139 @@
 {{define "styles"}}<style>
-  :root { color-scheme: light dark; --fg:#e8e8ea; --bg:#16171b; --muted:#9aa0a6; --card:#212228; --accent:#7c9cff; --ok:#4caf50; --bad:#e06c75; --line:#2c2e36; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  main { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-  h1 { font-size:1.4rem; } h2 { font-size:1.05rem; margin-top:2rem; }
-  a { color: var(--accent); }
-  .muted { color: var(--muted); }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.15rem; margin:1rem 0; }
-  .mono { font-family: ui-monospace, monospace; word-break: break-all; font-size:.9em; }
-  table { width:100%; border-collapse: collapse; }
-  th,td { text-align:left; padding:.5rem .4rem; border-bottom:1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight:600; font-size:.82rem; text-transform:uppercase; letter-spacing:.03em; }
-  button, input[type=submit] { font:inherit; background:var(--accent); color:#0b1020; border:0; border-radius:8px; padding:.5rem .9rem; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
-  input[type=text], textarea { font:inherit; width:100%; background:#1b1c22; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:.55rem .65rem; }
-  textarea { font-family: ui-monospace, monospace; min-height:6rem; }
-  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
-  .pill { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; border:1px solid var(--line); }
-  .pill.on { color:#7ee787; border-color:#2ea04326; } .pill.off { color:var(--bad); }
-  .err { color: var(--bad); }
-  /* Customer-facing landing (captive/login/packages) */
-  .hero { text-align:center; margin:1.75rem 0 1rem; }
-  .hero .logo { font-size:1.7rem; font-weight:700; letter-spacing:-.01em; margin:0; }
-  .lead { color:var(--muted); font-size:1.05rem; margin:.35rem 0 0; }
-  .banner { border-radius:10px; padding:1.1rem 1.2rem; margin:1rem 0; border:1px solid var(--line); background:var(--card); }
-  .banner h2 { margin:.1rem 0 .35rem; font-size:1.2rem; }
-  .banner.warn { border-color:#b8860b66; background:linear-gradient(0deg,var(--card),#b8860b0d); }
-  .banner.good { border-color:#2ea04355; }
-  .benefits { list-style:none; padding:0; margin:.6rem 0 0; display:grid; gap:.45rem; }
+  /* Light, one orange accent, generous radii, hairline borders — the same
+     design language as the Bridge captive portal / hole-land provider page. */
+  :root {
+    color-scheme: light;
+    --fg:#0E1116; --muted:#6B7580; --faint:#8A94A0;
+    --line:#E4E8EC; --line-soft:#EDF0F3; --surface:#F7F9FB;
+    --accent:#FF7A18; --accent-soft:#FFF8F2;
+    --green:#12A150; --green-soft:#E8F7EF;
+    --warn:#B25E00; --warn-soft:#FFF4E6;
+    --bad:#C4312B; --bad-soft:#FBEDEC;
+    --shadow:0 6px 20px rgba(14,17,22,.07);
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:#fff; color:var(--fg);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
+  main { max-width:600px; margin:0 auto; padding:22px 22px calc(48px + env(safe-area-inset-bottom)); }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  h1 { font-size:27px; font-weight:700; letter-spacing:-.02em; margin:20px 0 6px; }
+  h2 { font-size:15px; font-weight:700; margin:22px 0 10px; }
+  .lead { color:var(--muted); font-size:14.5px; margin:0; }
+  .muted { color:var(--muted); }
+  .note { color:var(--faint); font-size:12px; }
+  .center { text-align:center; }
+  .err { color:var(--bad); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; font-size:.9em; }
+  .row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+
+  /* ---- brand header ---- */
+  .topbar { display:flex; align-items:center; gap:11px; }
+  .mark { width:34px; height:34px; border-radius:10px; background:var(--accent);
+    display:grid; place-items:center; flex:none; }
+  .mark svg { display:block; }
+  .wordmark { font-size:17px; font-weight:700; }
+  .statuspill { margin-left:auto; display:inline-flex; align-items:center; gap:8px;
+    background:#F1F3F6; color:var(--muted); font-size:12px; font-weight:600;
+    padding:6px 13px; border-radius:999px; }
+  .statuspill .dot { width:8px; height:8px; border-radius:50%; background:#B0B8C1; flex:none; }
+  .statuspill.live { background:var(--green-soft); color:var(--green); }
+  .statuspill.live .dot { background:var(--green); }
+  .statuspill.warn { background:var(--warn-soft); color:var(--warn); }
+  .statuspill.warn .dot { background:var(--warn); }
+
+  /* ---- section label ---- */
+  .label { margin:26px 0 12px; font-size:12px; font-weight:700;
+    letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+  .step { display:inline-block; margin-bottom:.2rem; font-size:12px; font-weight:700;
+    letter-spacing:.05em; text-transform:uppercase; color:var(--accent); }
+  .divider { text-align:center; color:var(--faint); font-size:13px; margin:24px 0 8px; }
+
+  /* ---- cards & banners ---- */
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px;
+    padding:18px 20px; margin:12px 0; box-shadow:var(--shadow); }
+  .card h2 { margin-top:0; }
+  .banner { background:#fff; border:1px solid var(--line); border-radius:16px;
+    padding:18px 20px; margin:14px 0; box-shadow:var(--shadow); }
+  .banner h2 { margin:.1rem 0 .4rem; font-size:20px; letter-spacing:-.01em; }
+  .banner.warn { border-color:#F1C27D; background:var(--warn-soft); }
+  .banner.warn .step { color:var(--warn); }
+  .banner.good { border-color:#A6E0BE; background:var(--green-soft); }
+  .banner.good .step { color:var(--green); }
+
+  /* ---- benefits list ---- */
+  .benefits { list-style:none; padding:0; margin:.4rem 0 0; display:grid; gap:.5rem; }
   .benefits li { padding-left:1.6rem; position:relative; }
   .benefits li::before { content:"→"; position:absolute; left:0; color:var(--accent); font-weight:700; }
-  .btn-lg { padding:.7rem 1.25rem; font-size:1.02rem; font-weight:600; }
-  .price { font-size:1.15rem; font-weight:700; }
+
+  /* ---- plan / package / list rows ---- */
+  .plan { display:flex; align-items:center; gap:14px; width:100%;
+    border:1px solid var(--line); border-radius:16px; padding:15px 18px; margin-bottom:10px;
+    background:#fff; box-shadow:var(--shadow); }
+  .plan .grow { flex:1; min-width:0; }
+  .plan .ptop { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; }
+  .plan .psub { display:block; font-size:12.5px; color:var(--muted); margin-top:2px; }
+  .plan .pprice { margin-left:auto; text-align:right; white-space:nowrap; }
+  .plan .pprice .amt { font-size:16px; font-weight:700; }
+  .plan .pprice small { display:block; font-size:11px; font-weight:600; color:var(--muted); }
+  .badge { font-size:10.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--accent); background:#fff; border:1px solid var(--accent); border-radius:999px; padding:1px 8px; }
+
+  /* ---- data meter ---- */
+  .meter { background:var(--surface); border:1px solid var(--line-soft); border-radius:16px;
+    padding:16px 20px; margin:10px 0; }
+  .meter .mlabel { font-size:12px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--muted); }
+  .meter .big { font-size:26px; font-weight:700; margin:8px 0 0; letter-spacing:-.01em; }
+  .meter .big small { font-size:14px; font-weight:400; color:var(--faint); margin-left:4px; }
+  .bar { height:9px; border-radius:5px; background:#E6EAEE; margin:12px 0 10px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--green); border-radius:5px; }
+  .bar.low i { background:var(--accent); }
+
+  /* ---- price (used by help.html) ---- */
+  .price { font-size:16px; font-weight:700; }
   .tag { font-size:.74rem; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:.12rem .55rem; }
-  .center { text-align:center; }
-  .step { color:var(--muted); font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; font-weight:600; }
-  details.faq { border:1px solid var(--line); border-radius:10px; background:var(--card); margin:.5rem 0; }
-  details.faq > summary { cursor:pointer; padding:.75rem .95rem; font-weight:600; list-style:none; }
+
+  /* ---- buttons ---- */
+  button, input[type=submit], .btn { font:inherit; font-size:14.5px; font-weight:700;
+    background:var(--accent); color:#fff; border:0; border-radius:12px; padding:10px 18px; cursor:pointer; }
+  button:active, input[type=submit]:active { transform:translateY(1px); }
+  button.ghost, .ghost, input[type=submit].ghost { background:#fff; color:var(--fg); border:1px solid var(--line); }
+  .btn-lg { padding:12px 22px; font-size:15.5px; }
+  .btn-block { display:block; width:100%; }
+
+  /* ---- inputs ---- */
+  input[type=text], textarea { font:inherit; width:100%; background:#fff; color:var(--fg);
+    border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
+  input[type=text]:focus, textarea:focus { outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-soft); }
+  textarea { font-family:ui-monospace,monospace; min-height:6rem; }
+
+  /* ---- tables ---- */
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:.55rem .5rem; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--muted); font-weight:700; font-size:.74rem; text-transform:uppercase; letter-spacing:.04em; }
+
+  /* ---- small status pills (table cells / pay page) ---- */
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600;
+    border:1px solid var(--line); color:var(--muted); background:#fff; }
+  .pill.on { color:var(--green); border-color:#A6E0BE; background:var(--green-soft); }
+  .pill.off { color:var(--bad); border-color:#EBB7B4; background:var(--bad-soft); }
+
+  /* ---- FAQ (help.html) ---- */
+  details.faq { border:1px solid var(--line); border-radius:14px; background:#fff; margin:.5rem 0; box-shadow:var(--shadow); }
+  details.faq > summary { cursor:pointer; padding:.85rem 1rem; font-weight:700; list-style:none; }
   details.faq > summary::-webkit-details-marker { display:none; }
   details.faq > summary::before { content:"+"; color:var(--accent); font-weight:700; margin-right:.55rem; display:inline-block; width:.7em; }
   details.faq[open] > summary::before { content:"–"; }
-  details.faq > div { padding:0 .95rem .85rem; color:var(--muted); }
-  .pagenav { margin:2rem 0 .5rem; display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; font-size:.9rem; }
+  details.faq > div { padding:0 1rem .9rem; color:var(--muted); }
+
+  /* ---- hero (help.html) & footer nav ---- */
+  .hero { margin:16px 0 8px; }
+  .hero .logo { font-size:22px; font-weight:700; letter-spacing:-.01em; margin:0; }
+  .pagenav { margin:28px 0 .5rem; display:flex; gap:1.2rem; flex-wrap:wrap;
+    justify-content:center; font-size:.9rem; }
 </style>{{end}}
+
+{{define "brandmark"}}<span class="mark"><svg width="15" height="15" viewBox="0 0 14 14"><path d="M7 1 L13 13 H1 Z" fill="#fff"/></svg></span><span class="wordmark">fips-exit</span>{{end}}

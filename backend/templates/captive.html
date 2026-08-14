@@ -1,24 +1,27 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Internet access · fips-exit</title>{{template "styles" .}}</head><body><main>
 
-<div class="hero">
-  <h1 class="logo">fips-exit</h1>
-  <p class="lead">Fast, private Internet access for the fips mesh.</p>
+<div class="topbar">{{template "brandmark" .}}
+  <span class="statuspill{{if eq .Title "Out of data"}} warn{{end}}"><i class="dot"></i>{{if eq .Title "Out of data"}}Out of data{{else}}Not connected{{end}}</span>
 </div>
+
+<h1>Get online</h1>
+<p class="lead">Fast, private Internet access for the fips mesh.</p>
 
 <div class="banner{{if eq .Title "Out of data"}} warn{{end}}">
+  <span class="step">{{if eq .Title "Out of data"}}Action needed{{else}}Welcome{{end}}</span>
   <h2>{{.Title}}</h2>
-  <p>{{.Message}}</p>
-  <p class="row">
+  <p class="muted" style="margin:.2rem 0 1rem">{{.Message}}</p>
+  <div class="row">
     <a href="/login"><button class="btn-lg">{{if .Npub}}Buy more data{{else}}Get online{{end}}</button></a>
-    {{if .Npub}}<a href="/dashboard"><button class="ghost">My account</button></a>{{end}}
-  </p>
-  {{if .Addr}}<p class="muted mono">Your fips address: {{.Addr}}</p>{{end}}
+    {{if .Npub}}<a href="/dashboard"><button class="ghost btn-lg">My account</button></a>{{end}}
+  </div>
+  {{if .Addr}}<p class="note mono" style="margin:.9rem 0 0">Your fips address: {{.Addr}}</p>{{end}}
 </div>
 
-<div class="card">
-  <strong>What you get</strong>
+<div class="label">What you get</div>
+<div class="card" style="margin-top:0">
   <ul class="benefits">
     <li>Browse the clear Internet at the exit's speed, with DNS resolved for you — no leaks.</li>
     <li>Reach <span class="mono">.onion</span> sites on the very same connection, and switch to full Tor privacy when you want it.</li>
@@ -27,7 +30,7 @@
   </ul>
 </div>
 
-<p class="muted center">Access is prepaid by the data package tied to your nostr identity.
+<p class="note center" style="margin-top:20px">Access is prepaid by the data package tied to your nostr identity.
 Paid in Bitcoin — Lightning unlocks instantly.</p>
 
 <div class="pagenav"><a href="/login">Sign in</a><a href="/help">Help &amp; FAQ</a></div>

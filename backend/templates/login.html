@@ -1,20 +1,22 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sign in · fips-exit</title>{{template "styles" .}}</head><body><main>
 
-<div class="hero">
-  <h1 class="logo">fips-exit</h1>
-  <p class="lead">Sign in with your nostr identity — it's your account. No email, no password.</p>
+<div class="topbar">{{template "brandmark" .}}
+  <span class="statuspill"><i class="dot"></i>Not signed in</span>
 </div>
+
+<h1>Sign in</h1>
+<p class="lead">Your nostr identity is your account — no email, no password.</p>
 
 {{if .FipsHint}}<div class="banner good">
   <span class="step">Fastest — you're on fips</span>
-  <p style="margin:.35rem 0 .6rem">We recognize you as<br><span class="mono">{{.FipsHint}}</span>.
+  <p style="margin:.4rem 0 .8rem">We recognize you as <span class="mono">{{.FipsHint}}</span>.
   No signature needed — your fips address proves it's you.</p>
   <form method="post" action="/auth/fips"><button class="btn-lg">Continue as this identity</button></form>
 </div>{{else if .FipsSource}}<div class="banner good">
   <span class="step">Fastest — you're on fips</span>
-  <p style="margin:.35rem 0 .6rem">You're connecting over fips, so no signature is needed — just enter your
+  <p style="margin:.4rem 0 .8rem">You're connecting over fips, so no signature is needed — just enter your
   npub and we'll verify it against your fips address.</p>
   <form method="post" action="/auth/fips" class="row">
     <input type="text" name="npub" placeholder="npub1…" required style="flex:1;min-width:12rem">
@@ -22,17 +24,17 @@
   </form>
 </div>{{end}}
 
-<p class="muted center" style="margin:1.5rem 0 .25rem">— or sign in with a nostr signer —</p>
+<div class="divider">— or sign in with a nostr signer —</div>
 
 <div class="card">
-  <h2 style="margin-top:0">Browser extension</h2>
+  <h2>Browser extension</h2>
   <p class="muted">Desktop signers like nos2x or Alby (NIP-07). One click, nothing to copy.</p>
   <button id="nip07">Sign in with extension</button>
   <p id="err" class="err"></p>
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">Mobile signer (Amber) or paste</h2>
+  <h2>Mobile signer (Amber) or paste</h2>
   <p class="muted">On Android with <strong>Amber</strong>, or any nostr signer: sign an event whose
   <span class="mono">challenge</span> tag is <span class="mono" id="chal">…</span> and paste the signed
   event JSON below.</p>
@@ -42,7 +44,7 @@
   </form>
 </div>
 
-<p class="muted center">New here? Your nostr key is all you need — sign in, then choose a data package.</p>
+<p class="note center">New here? Your nostr key is all you need — sign in, then choose a data package.</p>
 
 <div class="pagenav"><a href="/help">Help &amp; FAQ</a></div>
 

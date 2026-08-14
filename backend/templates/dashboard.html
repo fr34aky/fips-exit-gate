@@ -1,66 +1,82 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Your account · fips-exit</title>{{template "styles" .}}</head><body><main>
-<div class="row" style="justify-content:space-between;align-items:center">
+
+<div class="topbar">{{template "brandmark" .}}
+  <span class="statuspill{{if .Active}} live{{else}} warn{{end}}"><i class="dot"></i>{{if .Active}}Online{{else}}Offline{{end}}</span>
+</div>
+
+<div class="row" style="justify-content:space-between;align-items:center;margin:16px 0 2px">
   <h1 style="margin:0">Your account</h1>
   <div class="row">
     <a href="/packages"><button>Buy data</button></a>
     <form method="post" action="/auth/logout"><button class="ghost">Sign out</button></form>
   </div>
 </div>
+<p class="note mono" style="margin:.2rem 0 0">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
 
 {{if .Active}}<div class="banner good">
   <span class="step">You're online</span>
-  <p style="margin:.3rem 0 0">You have an active package — your traffic is flowing through the exit.
-  Details below.</p>
+  <p class="muted" style="margin:.2rem 0 0">You have an active package — your traffic is flowing through the exit.
+  Usage below.</p>
 </div>{{else}}<div class="banner warn">
   <span class="step">Not online</span>
-  <p style="margin:.3rem 0 .6rem">You don't have an active package right now. Buy data to get back online —
-  Lightning unlocks instantly.</p>
+  <p class="muted" style="margin:.2rem 0 .8rem">You don't have an active package right now. Buy data to get
+  back online — Lightning unlocks instantly.</p>
   <a href="/packages"><button class="btn-lg">Buy data</button></a>
 </div>{{end}}
 
-<p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
-
-<h2>Your data</h2>
+<div class="label">Your data</div>
 {{if .S.Entitlements}}
-<table><thead><tr><th>Package</th><th>Remaining</th><th>Expires</th><th>Status</th></tr></thead><tbody>
-{{range .S.Entitlements}}<tr>
-  <td><div>{{if .Name}}{{.Name}}{{else}}{{if eq .Kind "volume"}}Data bundle{{else}}Time pass{{end}}{{end}}</div>
-    <div class="muted" style="font-size:.82em">bought {{.StartsAt.Format "2 Jan 2006"}}</div></td>
-  <td>{{if eq .Kind "volume"}}{{bytes .Remaining}} <span class="muted">of {{bytes .VolumeBytes}}</span>{{else}}<span class="muted">Unlimited</span>{{end}}</td>
-  <td>{{.ExpiresAt.Format "2 Jan 2006, 15:04"}}</td>
-  <td>{{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">used up / expired</span>{{end}}</td>
-</tr>{{end}}
-</tbody></table>
-<p class="muted">Total used so far: {{bytes .S.UsageBytes}}.</p>
+{{range .S.Entitlements}}
+<div class="meter">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <span class="mlabel">{{if .Name}}{{.Name}}{{else}}{{if eq .Kind "volume"}}Data bundle{{else}}Time pass{{end}}{{end}}</span>
+    {{if .Active}}<span class="pill on">active</span>{{else}}<span class="pill off">used up / expired</span>{{end}}
+  </div>
+  {{if eq .Kind "volume"}}
+  <div class="big">{{bytes .Remaining}}<small>of {{bytes .VolumeBytes}} left</small></div>
+  <div class="bar{{if not .Active}} low{{end}}"><i style="width:{{pct .Remaining .VolumeBytes}}%"></i></div>
+  {{else}}
+  <div class="big">Unlimited<small>data</small></div>
+  {{end}}
+  <div class="note">bought {{.StartsAt.Format "2 Jan 2006"}} · expires {{.ExpiresAt.Format "2 Jan 2006, 15:04"}}</div>
+</div>
+{{end}}
+<p class="note">Total used so far: {{bytes .S.UsageBytes}}.</p>
 {{else}}<div class="card">No packages yet. <a href="/packages">Choose a package →</a></div>{{end}}
 
 {{if .PacClearURL}}
-<h2>Connect your browser</h2>
-<p class="muted">Paste one of these into your browser's <em>Automatic proxy configuration URL</em> (Firefox:
-Settings → Network Settings), or download and load it. Both keep <span class="mono">.fips</span> sites direct
-and send the Internet through the exit — switch profiles by swapping the URL.</p>
-<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-  <div><div><strong>Connectivity</strong> <span class="muted">— clearnet + .onion, standard rate</span></div>
-    <div class="mono muted" style="font-size:.85em">{{.PacClearURL}}</div></div>
+<div class="label">Connect your browser</div>
+<p class="muted" style="margin:0 0 10px">Paste one of these into your browser's <em>Automatic proxy configuration
+URL</em> (Firefox: Settings → Network Settings), or download and load it. Both keep <span class="mono">.fips</span>
+sites direct and send the Internet through the exit — switch profiles by swapping the URL.</p>
+<div class="plan">
+  <span class="grow">
+    <span class="ptop">Connectivity <span class="badge">standard</span></span>
+    <span class="psub">clearnet + .onion</span>
+    <span class="psub mono" style="font-size:11px">{{.PacClearURL}}</span>
+  </span>
   <a href="{{.PacClearURL}}" download="proxy-clear.pac"><button class="ghost">Download</button></a>
-</div></div>
+</div>
 {{if .PacPrivURL}}
-<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-  <div><div><strong>Privacy</strong> <span class="muted">— all traffic via Tor, higher rate</span></div>
-    <div class="mono muted" style="font-size:.85em">{{.PacPrivURL}}</div></div>
+<div class="plan">
+  <span class="grow">
+    <span class="ptop">Privacy <span class="badge">Tor</span></span>
+    <span class="psub">all traffic via Tor, higher rate</span>
+    <span class="psub mono" style="font-size:11px">{{.PacPrivURL}}</span>
+  </span>
   <a href="{{.PacPrivURL}}" download="proxy-priv.pac"><button class="ghost">Download</button></a>
-</div></div>
+</div>
 {{end}}
-<p class="muted">Using the URL (not a downloaded copy) means updates apply automatically. More in the
+<p class="note">Using the URL (not a downloaded copy) means updates apply automatically. More in the
 <a href="/help">help &amp; FAQ</a>.</p>
 {{end}}
 
 {{if .S.Services}}
-<h2>Where your data went</h2>
-<p class="muted">One shared balance, metered per service at its own rate (e.g. Tor privacy costs a little more per
-byte than clearnet).</p>
+<div class="label">Where your data went</div>
+<p class="muted" style="margin:0 0 10px">One shared balance, metered per service at its own rate (e.g. Tor
+privacy costs a little more per byte than clearnet).</p>
 <table><thead><tr><th>Service</th><th>Rate</th><th>Traffic</th><th>Counted as</th></tr></thead><tbody>
 {{range .S.Services}}<tr>
   <td>{{.Name}}</td>
@@ -72,7 +88,7 @@ byte than clearnet).</p>
 {{end}}
 
 {{if .S.Open}}
-<h2>Pending payments</h2>
+<div class="label">Pending payments</div>
 <table><thead><tr><th>Package</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>
 {{range .S.Open}}<tr>
   <td>{{.PackageName}}</td>
@@ -81,13 +97,13 @@ byte than clearnet).</p>
   <td>{{if .CheckoutURL}}<a href="{{.CheckoutURL}}"><button class="ghost">{{if eq .Status "processing"}}View invoice{{else}}Pay now{{end}}</button></a>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
-<p class="muted">Access unlocks once payment is confirmed — instantly for Lightning, or after a block
+<p class="note">Access unlocks once payment is confirmed — instantly for Lightning, or after a block
 confirmation for on-chain Bitcoin.</p>
 {{end}}
 
-<h2>Shared access</h2>
-<p class="muted">Add your other devices (or people you trust) by their npub so they draw on this same
-package. You can disable any of them at any time.</p>
+<div class="label">Shared access</div>
+<p class="muted" style="margin:0 0 10px">Add your other devices (or people you trust) by their npub so they
+draw on this same package. You can disable any of them at any time.</p>
 <table><thead><tr><th>Identity</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
 {{range .S.Whitelist}}<tr>
   <td><div>{{if .Label}}{{.Label}}{{end}}</div><div class="mono muted">{{.Npub}}</div></td>
@@ -101,7 +117,7 @@ package. You can disable any of them at any time.</p>
 </tbody></table>
 
 <div class="card">
-  <h2 style="margin-top:0">Add a device or person</h2>
+  <h2>Add a device or person</h2>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
   <form method="post" action="/whitelist/add">
     <p><input type="text" name="guest_npub" placeholder="npub1…" required></p>

@@ -43,7 +43,7 @@ type portal struct {
 }
 
 func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []byte, trustFips, secure bool) (*portal, error) {
-	tmpl, err := template.New("").Funcs(template.FuncMap{"bytes": humanBytes, "sats": sats, "rate": rate}).
+	tmpl, err := template.New("").Funcs(template.FuncMap{"bytes": humanBytes, "sats": sats, "rate": rate, "pct": pct}).
 		ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -687,6 +687,22 @@ func urlq(s string) string { return strings.ReplaceAll(template.URLQueryEscaper(
 // sats renders a millisatoshi price as a whole-sat string.
 func sats(msat int64) string {
 	return strconv.FormatInt(msat/1000, 10) + " sats"
+}
+
+// pct returns part/whole as a whole-number percentage clamped to [0,100], used
+// by the dashboard data meters to size their progress bars.
+func pct(part, whole int64) int {
+	if whole <= 0 {
+		return 0
+	}
+	v := part * 100 / whole
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return int(v)
 }
 
 // rate renders a rate_ppm (1e6 = 1.0) as a human multiplier, e.g. "1.5×".

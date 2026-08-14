@@ -1,48 +1,51 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Buy data · fips-exit</title>{{template "styles" .}}</head><body><main>
-<div class="row" style="justify-content:space-between">
-  <h1 style="margin:0">Choose a package</h1>
-  <div class="row"><a href="/help"><button class="ghost">Help</button></a>
-    <a href="/dashboard"><button class="ghost">Back</button></a></div>
+
+<div class="topbar">{{template "brandmark" .}}
+  <a href="/dashboard"><button class="ghost">← Back</button></a>
 </div>
-<p class="muted">Pick a bundle below. It's tied to your nostr identity and shared across any devices you
-whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 
-{{if .Pending}}<div class="banner warn"><strong>Purchase recorded — waiting for payment.</strong>
-  <p class="muted" style="margin:.3rem 0 0">It activates automatically once paid. Track it under
-  <a href="/dashboard">pending payments</a> on your dashboard.</p></div>{{end}}
+<h1>Choose a package</h1>
+<p class="lead">Tied to your nostr identity and shared across any devices you whitelist.
+Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 
+{{if .Pending}}<div class="banner warn">
+  <span class="step">Waiting for payment</span>
+  <h2>Purchase recorded</h2>
+  <p class="muted" style="margin:.2rem 0 0">It activates automatically once paid. Track it under
+  <a href="/dashboard">pending payments</a> on your dashboard.</p>
+</div>{{end}}
+
+<div class="label">Packages</div>
 {{range .Packages}}
-<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-  <div>
-    <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} of data{{else}}Unlimited data{{end}} · valid {{.ValidityDays}} day{{if ne .ValidityDays 1}}s{{end}}</div>
-  </div>
-  <div class="row" style="align-items:center">
-    <div class="price">{{sats .PriceMsat}}</div>
-    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button class="btn-lg">Buy</button></form>
-  </div>
-</div></div>
+<div class="plan">
+  <span class="grow">
+    <span class="ptop">{{.Name}}{{if eq .Kind "time"}}<span class="badge">Unlimited</span>{{end}}</span>
+    <span class="psub">{{if eq .Kind "volume"}}{{bytes .VolumeBytes}} of data{{else}}Unlimited data{{end}} · valid {{.ValidityDays}} day{{if ne .ValidityDays 1}}s{{end}}</span>
+  </span>
+  <span class="pprice"><span class="amt">{{sats .PriceMsat}}</span></span>
+  <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button>Buy</button></form>
+</div>
 {{else}}<div class="card">No packages available right now — please check back soon.</div>{{end}}
 
 {{if .Services}}
-<h2>How your data is counted</h2>
-<p class="muted">Your package is one shared balance. How fast it's used depends on which service you connect
-through — each counts your traffic at its own rate.</p>
+<div class="label">How your data is counted</div>
+<p class="muted" style="margin:0 0 12px">Your package is one shared balance. How fast it's used depends on
+which service you connect through — each counts your traffic at its own rate.</p>
 {{range .Services}}
-<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-  <div>
-    <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else}}Egress service.{{end}}</div>
-  </div>
-  <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
-</div></div>
+<div class="plan">
+  <span class="grow">
+    <span class="ptop">{{.Name}}</span>
+    <span class="psub">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else}}Egress service.{{end}}</span>
+  </span>
+  <span class="pprice"><span class="amt">{{rate .RatePPM}}</span><small>data rate</small></span>
+</div>
 {{end}}
-<p class="muted">A higher rate means the same traffic uses more of your balance — e.g. at 1.5×, 1&nbsp;GB of
+<p class="note">A higher rate means the same traffic uses more of your balance — e.g. at 1.5×, 1&nbsp;GB of
 browsing counts as 1.5&nbsp;GB. More in the <a href="/help">help &amp; FAQ</a>.</p>
 {{end}}
 
-<p class="muted center">Payment methods shown at checkout depend on this exit. Volume bundles are metered by
-data used; time passes give unlimited data until they expire.</p>
+<p class="note center" style="margin-top:18px">Payment methods shown at checkout depend on this exit. Volume
+bundles are metered by data used; time passes give unlimited data until they expire.</p>
 </main></body></html>
