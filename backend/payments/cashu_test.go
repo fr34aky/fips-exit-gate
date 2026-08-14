@@ -66,6 +66,28 @@ func TestCashuMeltUnderfunded(t *testing.T) {
 	}
 }
 
+func TestMeltAmount(t *testing.T) {
+	for _, c := range []struct{ in, want uint64 }{
+		{2000, 2020}, // 1% = 20
+		{150, 152},   // ceil(1.5) -> 2
+		{50, 51},     // ceil(0.5) -> 1
+		{100, 101},
+		{0, 0},
+	} {
+		if got := MeltAmount(c.in); got != c.want {
+			t.Errorf("MeltAmount(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+	// A token sized by MeltAmount clears a mint reserving exactly 1% — the case a
+	// bare-price token fails (see TestCashuMeltUnderfunded).
+	srv := fakeMint(20) // 1% of the 2000-sat quote
+	defer srv.Close()
+	c := NewCashuRedeemer(nil, srv.Client())
+	if _, err := c.Melt(context.Background(), cashuToken(t, srv.URL, MeltAmount(2000)), "lnbc2u..."); err != nil {
+		t.Fatalf("MeltAmount token rejected by a 1%% mint: %v", err)
+	}
+}
+
 func TestCashuMeltMintNotAccepted(t *testing.T) {
 	srv := fakeMint(50)
 	defer srv.Close()

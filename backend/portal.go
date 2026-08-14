@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -110,8 +111,14 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 	// its own QR — paying it POSTs a token to /pay/{id}/cashu-receive. The paste
 	// box works for wallets without NUT-18.
 	if p.cashu != nil && v.Bolt11 != "" {
+		// Ask for the invoice plus a 1% fee headroom: a Cashu melt needs proofs
+		// covering amount + the mint's fee_reserve, so a token equal to the bare
+		// price is rejected as underfunded (both the scanned request and the paste
+		// box must be sized this way).
+		meltSat := payments.MeltAmount(uint64(v.PriceMsat / 1000))
+		data["CashuAmount"] = meltSat
 		target := p.publicURL + "/pay/" + r.PathValue("id") + "/cashu-receive"
-		if req, err := p.cashu.PaymentRequest(uint64(v.PriceMsat/1000), target); err == nil {
+		if req, err := p.cashu.PaymentRequest(meltSat, target); err == nil {
 			data["CashuReq"] = req
 			data["CashuQR"] = qrDataURI(req)
 		}
@@ -124,35 +131,51 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 // the purchase's invoice. Grant then flows via the phoenixd receipt like any
 // other payment. Unscoped by owner: paying only ever credits the purchase owner.
 func (p *portal) cashuReceive(w http.ResponseWriter, r *http.Request) {
+	// NUT-18 wallets parse this response as JSON, so every reply here must be
+	// JSON — a plain-text body makes the payer's wallet throw a JSON parse error
+	// ("Unexpected character: b" from "bad payload") instead of showing the real
+	// outcome.
 	if p.cashu == nil {
-		http.Error(w, "cashu payments not enabled", http.StatusNotFound)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "cashu payments not enabled"})
 		return
 	}
 	id := r.PathValue("id")
 	bolt11, status, err := p.store.PurchaseInvoice(r.Context(), id)
 	if err != nil {
-		http.Error(w, "purchase not found", http.StatusNotFound)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "purchase not found"})
 		return
 	}
 	if status == "settled" {
-		w.WriteHeader(http.StatusOK)
+		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 	if bolt11 == "" {
-		http.Error(w, "no lightning invoice for this purchase", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no lightning invoice for this purchase"})
 		return
 	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		log.Printf("portal: cashu-receive read body for purchase %s: %v", id, err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not read body"})
+		return
+	}
+	var meltErr error
 	var payload payments.PaymentRequestPayload
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
-		http.Error(w, "bad payload", http.StatusBadRequest)
+	if err := json.Unmarshal(body, &payload); err == nil && len(payload.Proofs) > 0 {
+		_, meltErr = p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Proofs, bolt11)
+	} else {
+		// Fallback: some wallets POST a bare serialized token (cashuA…/cashuB…)
+		// rather than a NUT-18 JSON payload. Log why the JSON path was skipped so
+		// the real cause is visible, then try the body as a token.
+		log.Printf("portal: cashu-receive body for %s not a NUT-18 payload (err=%v, proofs=%d); trying as bare token", id, err, len(payload.Proofs))
+		_, meltErr = p.cashu.Melt(r.Context(), string(body), bolt11)
+	}
+	if meltErr != nil {
+		log.Printf("portal: cashu-receive melt for purchase %s: %v", id, meltErr)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "melt failed: " + meltErr.Error()})
 		return
 	}
-	if _, err := p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Proofs, bolt11); err != nil {
-		log.Printf("portal: cashu-receive melt for purchase %s: %v", id, err)
-		http.Error(w, "melt failed", http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
 // payCashu redeems a pasted Cashu token by melting it (at the token's own mint)

@@ -111,6 +111,24 @@ func (c *CashuRedeemer) MeltProofs(ctx context.Context, mint string, proofs cash
 	return q.Amount, nil
 }
 
+// FeeHeadroomPercent is added on top of the invoice amount when asking a Cashu
+// payer for a token, to cover the mint's NUT-05 melt fee_reserve (a Lightning
+// routing reserve). A token equal to the bare invoice always fails the melt
+// check — MeltProofs needs proofs covering amount + fee_reserve — so a payer who
+// sends exactly the package price is rejected as underfunded. 1% clears the
+// reserve at typical mints. Any unused headroom is forfeited (v1: we request no
+// NUT-08 change).
+const FeeHeadroomPercent = 1
+
+// MeltAmount returns the sat amount a payer should present to melt a token to an
+// invoice of invoiceSat: the invoice plus a FeeHeadroomPercent headroom, rounded
+// up. Use it both to size the NUT-18 request and to tell paste-box payers how big
+// a token to send.
+func MeltAmount(invoiceSat uint64) uint64 {
+	headroom := (invoiceSat*FeeHeadroomPercent + 99) / 100 // ceil(invoiceSat * 1%)
+	return invoiceSat + headroom
+}
+
 // --- NUT-18 payment request (a QR the buyer's Cashu wallet scans to pay) ---
 
 type prTransport struct {

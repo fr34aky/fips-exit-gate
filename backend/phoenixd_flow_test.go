@@ -214,3 +214,53 @@ func TestCashuReceiveMelts(t *testing.T) {
 		t.Fatalf("cashu-receive status = %d, want 200", resp.StatusCode)
 	}
 }
+
+// Regression: a rejected cashu-receive POST must answer with JSON, not a
+// plain-text body. NUT-18 wallets JSON.parse the response, so a "bad payload"
+// text body surfaces to the payer as "JSON Parse Error: Unexpected character: b".
+func TestCashuReceiveErrorIsJSON(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pkgs, _ := st.ListPackages(ctx)
+
+	p := testPortal(t, st, false)
+	p.cashu = payments.NewCashuRedeemer(nil, nil)
+	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
+	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
+	defer srv.Close()
+
+	_, npub, _ := newTestKey(t)
+	pid := makeLightning(t, st, npub, pkgs, "ph_cashu_err")
+
+	// A body that is neither a NUT-18 payload nor a decodable token.
+	resp, err := http.Post(srv.URL+"/pay/"+pid+"/cashu-receive", "application/json",
+		bytes.NewReader([]byte("bad payload not a token")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("cashu-receive accepted a bogus body (status %d)", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) == 0 || body[0] != '{' {
+		t.Fatalf("error response is not JSON (first byte %q): %s", firstByte(body), body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("error response does not parse as JSON: %v (body: %s)", err, body)
+	}
+	if _, ok := out["error"]; !ok {
+		t.Fatalf("error response missing \"error\" key: %s", body)
+	}
+}
+
+func firstByte(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return string(b[:1])
+}
