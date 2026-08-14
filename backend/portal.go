@@ -162,7 +162,7 @@ func (p *portal) cashuReceive(w http.ResponseWriter, r *http.Request) {
 	var meltErr error
 	var payload payments.PaymentRequestPayload
 	if err := json.Unmarshal(body, &payload); err == nil && len(payload.Proofs) > 0 {
-		_, meltErr = p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Proofs, bolt11)
+		_, meltErr = p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Cashu(), bolt11)
 	} else {
 		// Fallback: some wallets POST a bare serialized token (cashuA…/cashuB…)
 		// rather than a NUT-18 JSON payload. Log why the JSON path was skipped so
