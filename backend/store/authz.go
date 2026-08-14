@@ -79,62 +79,76 @@ func (s *Store) CurrentRev(ctx context.Context) (int64, error) {
 	return rev, err
 }
 
-// FullSet returns the complete current authorized set.
+// FullSet returns the complete current authorized set and the revision it
+// reflects, read in one snapshot so the revision matches the set exactly.
 func (s *Store) FullSet(ctx context.Context) ([]AuthzMember, int64, error) {
-	rev, err := s.CurrentRev(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	m, err := scanAddrAccount(ctx, s.pool, `SELECT host(fips_addr), account_id::text FROM authz_current`)
-	if err != nil {
-		return nil, 0, err
-	}
-	out := make([]AuthzMember, 0, len(m))
-	for addr, acct := range m {
-		if a, e := netip.ParseAddr(addr); e == nil {
-			out = append(out, AuthzMember{Addr: a, Account: acct})
+	var rev int64
+	var out []AuthzMember
+	err := s.readTxRR(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev); err != nil {
+			return err
 		}
+		m, err := scanAddrAccount(ctx, tx, `SELECT host(fips_addr), account_id::text FROM authz_current`)
+		if err != nil {
+			return err
+		}
+		out = make([]AuthzMember, 0, len(m))
+		for addr, acct := range m {
+			if a, e := netip.ParseAddr(addr); e == nil {
+				out = append(out, AuthzMember{Addr: a, Account: acct})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
 	}
 	return out, rev, nil
 }
 
 // DeltaSince returns the net add/del since clientRev by replaying the revision
-// log (so an add-then-del of the same address collapses correctly).
+// log (so an add-then-del of the same address collapses correctly). The rows
+// and the returned revision are read in ONE snapshot (readTxRR): the revision
+// must reflect exactly the rows replayed, so the agent never advances its
+// cursor past a change it wasn't handed and skips it permanently.
 func (s *Store) DeltaSince(ctx context.Context, clientRev int64) (add []AuthzMember, del []netip.Addr, rev int64, err error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT op, host(fips_addr), account_id::text FROM authz_revisions WHERE rev > $1 ORDER BY rev`, clientRev)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	defer rows.Close()
+	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT op, host(fips_addr), account_id::text FROM authz_revisions WHERE rev > $1 ORDER BY rev`, clientRev)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 
-	type state struct {
-		op   string
-		acct string
-	}
-	final := map[string]state{}
-	for rows.Next() {
-		var op, addr, acct string
-		if err := rows.Scan(&op, &addr, &acct); err != nil {
-			return nil, nil, 0, err
+		type state struct {
+			op   string
+			acct string
 		}
-		final[addr] = state{op: op, acct: acct}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, 0, err
-	}
-	for addr, st := range final {
-		a, e := netip.ParseAddr(addr)
-		if e != nil {
-			continue
+		final := map[string]state{}
+		for rows.Next() {
+			var op, addr, acct string
+			if err := rows.Scan(&op, &addr, &acct); err != nil {
+				return err
+			}
+			final[addr] = state{op: op, acct: acct}
 		}
-		if st.op == "add" {
-			add = append(add, AuthzMember{Addr: a, Account: st.acct})
-		} else {
-			del = append(del, a)
+		if err := rows.Err(); err != nil {
+			return err
 		}
-	}
-	if rev, err = s.CurrentRev(ctx); err != nil {
+		for addr, st := range final {
+			a, e := netip.ParseAddr(addr)
+			if e != nil {
+				continue
+			}
+			if st.op == "add" {
+				add = append(add, AuthzMember{Addr: a, Account: st.acct})
+			} else {
+				del = append(del, a)
+			}
+		}
+		return tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev)
+	})
+	if err != nil {
 		return nil, nil, 0, err
 	}
 	return add, del, rev, nil
