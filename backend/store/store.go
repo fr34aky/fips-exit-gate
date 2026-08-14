@@ -96,3 +96,22 @@ func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	}
 	return tx.Commit(ctx)
 }
+
+// readTxRR runs fn inside a read-only REPEATABLE READ transaction, so every
+// statement fn issues observes the SAME snapshot. The authz delta/full reads
+// rely on this: they read both the changed rows (or authz_current) and the
+// current revision, and the returned revision must never outrun the rows read
+// — otherwise an agent advances its cursor past a change it never received and
+// skips it permanently. READ COMMITTED (the default) gives each statement its
+// own snapshot and would reintroduce that race.
+func (s *Store) readTxRR(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
