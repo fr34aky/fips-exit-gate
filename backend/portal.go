@@ -382,13 +382,14 @@ func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := p.session(r); !ok {
+	npub, ok := p.session(r)
+	if !ok {
 		// Direct-buy entry: /packages?npub=<npub> arriving over fips. Verify the
 		// claimed npub against the fd00::/8 source address and open a session, so
 		// a buyer can purchase without first visiting /login. Falls back to the
 		// bare source address when no npub is supplied (a known fips visitor).
-		npub, vok := p.transparentNpub(r)
-		if !vok {
+		npub, ok = p.transparentNpub(r)
+		if !ok {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -405,8 +406,10 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	services, _ := p.store.EnabledServices(r.Context()) // non-fatal; the explainer is optional
+	// Npub goes into the buy form as a hidden field so a cookie-less client
+	// (captive webview / script) still authenticates /buy against its fips source.
 	p.render(w, "packages.html", map[string]any{
-		"Packages": pkgs, "Services": services, "Pending": r.URL.Query().Get("pending") != "",
+		"Packages": pkgs, "Services": services, "Npub": npub, "Pending": r.URL.Query().Get("pending") != "",
 	})
 }
 
@@ -571,8 +574,20 @@ func (p *portal) pacFor(key string) http.HandlerFunc {
 func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 	npub, ok := p.session(r)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+		// Direct-buy: a cookie-less fips client (captive webview / script) posts
+		// its npub, verified against the fd00::/8 source address — no session
+		// round-trip required. Mirrors packagesPage's direct-buy entry, so buying
+		// works even when the client that hit /packages?npub= keeps no cookies.
+		npub, ok = p.transparentNpub(r)
+		if !ok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+			log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
+			http.Error(w, "could not create account", http.StatusInternalServerError)
+			return
+		}
 	}
 	ctx := r.Context()
 	packageID := strings.TrimSpace(r.FormValue("package_id"))

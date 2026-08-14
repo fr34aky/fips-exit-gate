@@ -318,6 +318,52 @@ func TestPackagesDirectBuy(t *testing.T) {
 	}
 }
 
+// TestBuyDirectOverFips covers the cookie-less direct-buy: a fips client POSTs
+// /buy with its npub and no session cookie (a captive webview / script), the
+// npub is verified against the source address, and it settles under autosettle.
+// A spoofed npub is bounced to /login with no purchase. This is the path that
+// failed when /buy required a session cookie the client never kept.
+func TestBuyDirectOverFips(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p := testPortal(t, st, true) // trustFipsSource on
+	p.autoSettle = true
+
+	_, npub, addr := newTestKey(t)
+	pkgs, _ := st.ListPackages(ctx)
+	fipsRemote := "[" + addr.String() + "]:40000"
+
+	buyPost := func(claim string) *httptest.ResponseRecorder {
+		form := url.Values{"package_id": {pkgs[0].ID}, "npub": {claim}}
+		req := httptest.NewRequest("POST", "/buy", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = fipsRemote // no Cookie header — cookie-less client
+		rec := httptest.NewRecorder()
+		p.buy(rec, req)
+		return rec
+	}
+
+	// Cookie-less POST /buy with the caller's own npub over fips -> autosettle grant.
+	rec := buyPost(npub)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("cookie-less buy = %d loc=%q, want 303 -> /dashboard", rec.Code, rec.Header().Get("Location"))
+	}
+	full, _, _ := st.FullSet(ctx)
+	if !hasAddr(full, addr) {
+		t.Fatalf("addr %s not authorized after cookie-less direct buy", addr)
+	}
+
+	// A spoofed npub (not derived from the source address) -> /login, no purchase.
+	_, otherNpub, _ := newTestKey(t)
+	rec = buyPost(otherNpub)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("spoofed cookie-less buy = %d loc=%q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
 func hasAddr(ms []store.AuthzMember, a netip.Addr) bool {
 	for _, m := range ms {
 		if m.Addr == a {
