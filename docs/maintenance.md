@@ -111,7 +111,8 @@ starting a newer backend upgrades the schema in place.
 
 ```sh
 git pull
-# Backend host:
+# Backend host (source backend.env first so compose can interpolate its secrets):
+set -a; . deploy/backend.env; set +a
 docker compose -f deploy/backend-compose.yaml up -d --build   # migrations auto-apply on start
 # Each exit node:
 cd deploy && sudo -E ./up.sh reload                            # re-render the gate ONLY if services.conf changed
