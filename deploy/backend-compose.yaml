@@ -24,7 +24,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-fips}"]
+      # -d is required: pg_isready defaults the target db to the username, so
+      # without it every probe hits a nonexistent "fips" db and logs a FATAL.
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-fips} -d ${PGDATABASE:-fips_exit}"]
       interval: 5s
       timeout: 3s
       retries: 10
