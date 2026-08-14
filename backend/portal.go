@@ -70,6 +70,7 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /proxy-priv.pac", p.pacFor("tor"))       // Privacy profile
 	mux.HandleFunc("GET /fips.pac", p.pacFor("clearnet"))        // back-compat alias
 	mux.HandleFunc("GET /packages", p.packagesPage)
+	mux.HandleFunc("GET /status", p.status)
 	mux.HandleFunc("POST /buy", p.buy)
 	mux.HandleFunc("GET /pay/{id}", p.payPage)
 	mux.HandleFunc("GET /pay/{id}/status", p.payStatus)
@@ -382,8 +383,21 @@ func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
 
 func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := p.session(r); !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+		// Direct-buy entry: /packages?npub=<npub> arriving over fips. Verify the
+		// claimed npub against the fd00::/8 source address and open a session, so
+		// a buyer can purchase without first visiting /login. Falls back to the
+		// bare source address when no npub is supplied (a known fips visitor).
+		npub, vok := p.transparentNpub(r)
+		if !vok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+			log.Printf("portal: packages CreateAccount(%s): %v", npub, err)
+			http.Error(w, "could not create account", http.StatusInternalServerError)
+			return
+		}
+		p.setSession(w, npub)
 	}
 	pkgs, err := p.store.ListPackages(r.Context())
 	if err != nil {
@@ -394,6 +408,60 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 	p.render(w, "packages.html", map[string]any{
 		"Packages": pkgs, "Services": services, "Pending": r.URL.Query().Get("pending") != "",
 	})
+}
+
+// status is a machine-readable payment check for the direct-buy flow. It
+// identifies the caller — session cookie first, else a ?npub= claim verified
+// against the fips source address, else the bare fips source — and reports
+// whether that account has an active data package:
+//
+//	200 OK               — active package (JSON {"active":true,"expires_at":...})
+//	402 Payment Required — identified but no active package (JSON {"active":false,"buy_url":...})
+//	401 Unauthorized     — the caller can't be identified (no session, not on fips)
+//
+// A client polls this after sending a buyer to /packages?npub=<npub>; the flip
+// from 402 to 200 signals that the purchase has settled.
+func (p *portal) status(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	npub, ok := p.session(r)
+	if !ok {
+		npub, ok = p.transparentNpub(r)
+	}
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"active": false,
+			"error":  "cannot identify account: sign in, or request over fips with ?npub=<npub>",
+		})
+		return
+	}
+	active := false
+	var expiresAt time.Time
+	switch s, err := p.store.Summary(r.Context(), npub); {
+	case err == store.ErrAccountNotFound:
+		// A valid identity that simply has no account (never bought anything) yet.
+	case err != nil:
+		http.Error(w, "error loading account", http.StatusInternalServerError)
+		return
+	default:
+		for _, e := range s.Entitlements {
+			if e.Active {
+				active = true
+				if e.ExpiresAt.After(expiresAt) {
+					expiresAt = e.ExpiresAt // access lasts until the last active grant lapses
+				}
+			}
+		}
+	}
+	body := map[string]any{"active": active, "npub": npub}
+	if active {
+		if !expiresAt.IsZero() {
+			body["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+		}
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	body["buy_url"] = p.publicURL + "/packages?npub=" + url.QueryEscape(npub)
+	writeJSON(w, http.StatusPaymentRequired, body)
 }
 
 // help serves the public FAQ / help page. No session required — it's linked from

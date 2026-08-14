@@ -230,6 +230,94 @@ func TestLoginPageFipsNpubEntry(t *testing.T) {
 	}
 }
 
+// TestStatusEndpoint covers the /status payment check: 402 for an identified
+// but unpaid fips caller (with a buy_url), 200 once a package is active, and 401
+// when the caller can't be identified (spoofed npub or non-fips, no session).
+func TestStatusEndpoint(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	p := testPortal(t, st, true) // trustFipsSource on
+
+	_, npub, addr := newTestKey(t)
+
+	call := func(query string, remote netip.Addr) (int, map[string]any) {
+		req := httptest.NewRequest("GET", "/status"+query, nil)
+		req.RemoteAddr = "[" + remote.String() + "]:40000"
+		rec := httptest.NewRecorder()
+		p.status(rec, req)
+		var body map[string]any
+		json.NewDecoder(rec.Body).Decode(&body)
+		return rec.Code, body
+	}
+
+	// Unpaid identity over fips -> 402 with a buy_url pointing at /packages.
+	code, body := call("?npub="+npub, addr)
+	if code != http.StatusPaymentRequired || body["active"] != false {
+		t.Fatalf("unpaid status = %d active=%v, want 402/false", code, body["active"])
+	}
+	if bu, _ := body["buy_url"].(string); !strings.Contains(bu, "/packages?npub=") {
+		t.Fatalf("unpaid status missing buy_url, got %v", body["buy_url"])
+	}
+
+	// Grant a package -> 200 active.
+	if err := st.CreditVolume(ctx, npub, 1_000_000, 30); err != nil {
+		t.Fatal(err)
+	}
+	if code, body = call("?npub="+npub, addr); code != http.StatusOK || body["active"] != true {
+		t.Fatalf("paid status = %d active=%v, want 200/true", code, body["active"])
+	}
+
+	// A spoofed npub (not derived from the source address) can't be identified -> 401.
+	_, otherNpub, _ := newTestKey(t)
+	if code, _ = call("?npub="+otherNpub, addr); code != http.StatusUnauthorized {
+		t.Fatalf("spoofed-npub status = %d, want 401", code)
+	}
+
+	// A non-fips caller with no session -> 401.
+	if code, _ = call("", netip.MustParseAddr("203.0.113.5")); code != http.StatusUnauthorized {
+		t.Fatalf("non-fips status = %d, want 401", code)
+	}
+}
+
+// TestPackagesDirectBuy covers the /packages?npub=<npub> direct-buy entry: a
+// fips caller with no session is verified against their source address, gets a
+// session, and sees the catalog — while a spoofed npub is bounced to /login.
+func TestPackagesDirectBuy(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	if err := st.SeedPackages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p := testPortal(t, st, true) // trustFipsSource on
+
+	_, npub, addr := newTestKey(t)
+
+	// Direct-buy entry over fips renders the catalog and opens a session.
+	req := httptest.NewRequest("GET", "/packages?npub="+npub, nil)
+	req.RemoteAddr = "[" + addr.String() + "]:40000"
+	rec := httptest.NewRecorder()
+	p.packagesPage(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Buy") {
+		t.Fatalf("direct-buy packages status = %d (want 200 with catalog)", rec.Code)
+	}
+	if !strings.Contains(strings.Join(rec.Result().Header["Set-Cookie"], ";"), sessionCookie) {
+		t.Fatal("direct-buy did not open a session")
+	}
+
+	// A spoofed npub (mismatched source) is bounced to /login, no session.
+	_, otherNpub, _ := newTestKey(t)
+	req = httptest.NewRequest("GET", "/packages?npub="+otherNpub, nil)
+	req.RemoteAddr = "[" + addr.String() + "]:40000"
+	rec = httptest.NewRecorder()
+	p.packagesPage(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("spoofed direct-buy = %d loc=%q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+	if strings.Contains(strings.Join(rec.Result().Header["Set-Cookie"], ";"), sessionCookie) {
+		t.Fatal("spoofed direct-buy opened a session")
+	}
+}
+
 func hasAddr(ms []store.AuthzMember, a netip.Addr) bool {
 	for _, m := range ms {
 		if m.Addr == a {
