@@ -2,8 +2,10 @@
 
 > **Status: IMPLEMENTED (experimental, opt-in).** Enable with `CASHU_ACCEPT=1`
 > on the phoenixd rail. Token decoding via `github.com/elnosh/gonuts`; melt via
-> NUT-05 HTTP. Overpayment is forfeited (no change is requested — a v1 cut), so
-> buyers must send a token sized to the package price.
+> NUT-05 HTTP. Overpayment is forfeited (no change is requested — a v1 cut). A
+> melt needs proofs covering `amount + fee_reserve`, so buyers must send a token
+> sized to the package price **plus a ~1% melt-fee headroom** (`payments.MeltAmount`);
+> a token equal to the bare price is rejected as underfunded.
 
 ## Enabling & testing
 
@@ -16,7 +18,9 @@ CASHU_ACCEPTED_MINTS=   # optional allowlist; empty = any mint
 CASHU_SOCKS5=           # optional, for an .onion mint over Tor
 ```
 
-The pay page then offers Cashu two ways, both sized to the package price:
+The pay page then offers Cashu two ways, both sized to the package price plus a
+~1% melt-fee headroom (`payments.MeltAmount`; the pay page shows the exact sat
+amount to send):
 - **Scan** — a **NUT-18 payment request** (`creqA…`) QR. A wallet that supports
   payment requests scans it and POSTs the token to `/pay/{id}/cashu-receive`,
   which melts it. (Wallet NUT-18 support is still uneven; the paste box is the
@@ -25,7 +29,8 @@ The pay page then offers Cashu two ways, both sized to the package price:
 
 Either way the token is melted at its mint to the purchase's invoice, phoenixd
 receives, and the existing webhook/reconciler grants access. To test: fund a
-wallet at any mint, and either scan the QR or send yourself an exact-amount token
+wallet at any mint, and either scan the QR or send yourself a token for the
+amount shown on the pay page (price + ~1%)
 and paste it. Watch `docker logs -f fips-exit-backend-backend-1`.
 
 Implemented in: `backend/payments/cashu.go` (`CashuRedeemer.Melt` /

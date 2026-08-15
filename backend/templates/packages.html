@@ -21,7 +21,7 @@ whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
   </div>
   <div class="row" style="align-items:center">
     <div class="price">{{sats .PriceMsat}}</div>
-    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><button class="btn-lg">Buy</button></form>
+    <form method="post" action="/buy"><input type="hidden" name="package_id" value="{{.ID}}"><input type="hidden" name="npub" value="{{$.Npub}}"><button class="btn-lg">Buy</button></form>
   </div>
 </div></div>
 {{else}}<div class="card">No packages available right now — please check back soon.</div>{{end}}

@@ -33,7 +33,8 @@
          style="max-width:100%;height:auto;background:#fff;padding:12px;border-radius:12px">
   </p>
   <p class="muted">Scan with a Cashu wallet that supports payment requests — or
-  paste a token below. Send the exact package price; overpayment isn't refunded.</p>
+  paste a token below. Send a token of at least <strong>{{.CashuAmount}} sat</strong>
+  (the price plus ~1% to cover the mint's melt fee); any excess isn't refunded.</p>
   <textarea id="cashuReq" readonly onclick="this.select()">{{.CashuReq}}</textarea>{{end}}
   <form id="cashuForm">
     <textarea id="cashuToken" placeholder="cashuB… or cashuA…" required></textarea>

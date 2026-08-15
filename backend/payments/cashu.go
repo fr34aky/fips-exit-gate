@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,6 +112,24 @@ func (c *CashuRedeemer) MeltProofs(ctx context.Context, mint string, proofs cash
 	return q.Amount, nil
 }
 
+// FeeHeadroomPercent is added on top of the invoice amount when asking a Cashu
+// payer for a token, to cover the mint's NUT-05 melt fee_reserve (a Lightning
+// routing reserve). A token equal to the bare invoice always fails the melt
+// check — MeltProofs needs proofs covering amount + fee_reserve — so a payer who
+// sends exactly the package price is rejected as underfunded. 1% clears the
+// reserve at typical mints. Any unused headroom is forfeited (v1: we request no
+// NUT-08 change).
+const FeeHeadroomPercent = 1
+
+// MeltAmount returns the sat amount a payer should present to melt a token to an
+// invoice of invoiceSat: the invoice plus a FeeHeadroomPercent headroom, rounded
+// up. Use it both to size the NUT-18 request and to tell paste-box payers how big
+// a token to send.
+func MeltAmount(invoiceSat uint64) uint64 {
+	headroom := (invoiceSat*FeeHeadroomPercent + 99) / 100 // ceil(invoiceSat * 1%)
+	return invoiceSat + headroom
+}
+
 // --- NUT-18 payment request (a QR the buyer's Cashu wallet scans to pay) ---
 
 type prTransport struct {
@@ -144,13 +163,55 @@ func (c *CashuRedeemer) PaymentRequest(amountSat uint64, postTarget string) (str
 	return "creqA" + base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// PaymentRequestPayload is the NUT-18 body a wallet POSTs to the transport target.
+// PaymentRequestPayload is the NUT-18 body a wallet POSTs to the transport
+// target. Proofs use lenientProof because wallets disagree on the JSON type of a
+// proof's amount: gonuts (and NUT-00) use a number, but some — Minibits, notably —
+// serialize it as a string. Call Cashu() to get gonuts proofs for the melt.
 type PaymentRequestPayload struct {
-	ID     string       `json:"id"`
-	Memo   string       `json:"memo"`
-	Mint   string       `json:"mint"`
-	Unit   string       `json:"unit"`
-	Proofs cashu.Proofs `json:"proofs"`
+	ID     string         `json:"id"`
+	Memo   string         `json:"memo"`
+	Mint   string         `json:"mint"`
+	Unit   string         `json:"unit"`
+	Proofs []lenientProof `json:"proofs"`
+}
+
+// Cashu converts the wire proofs to gonuts proofs for melting.
+func (p PaymentRequestPayload) Cashu() cashu.Proofs {
+	out := make(cashu.Proofs, len(p.Proofs))
+	for i, lp := range p.Proofs {
+		out[i] = cashu.Proof{
+			Amount:  uint64(lp.Amount),
+			Id:      lp.Id,
+			Secret:  lp.Secret,
+			C:       lp.C,
+			Witness: lp.Witness,
+			DLEQ:    lp.DLEQ,
+		}
+	}
+	return out
+}
+
+// lenientProof mirrors cashu.Proof but tolerates a string-encoded amount.
+type lenientProof struct {
+	Amount  flexUint64       `json:"amount"`
+	Id      string           `json:"id"`
+	Secret  string           `json:"secret"`
+	C       string           `json:"C"`
+	Witness string           `json:"witness,omitempty"`
+	DLEQ    *cashu.DLEQProof `json:"dleq,omitempty"`
+}
+
+// flexUint64 decodes from either a JSON number (2100) or a JSON string ("2100").
+type flexUint64 uint64
+
+func (f *flexUint64) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("proof amount %q: %w", s, err)
+	}
+	*f = flexUint64(n)
+	return nil
 }
 
 func (c *CashuRedeemer) post(ctx context.Context, url string, body, out any) error {

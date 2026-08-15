@@ -89,6 +89,9 @@ Buy a package; the `/pay/{id}` page shows a fake BOLT11 (+ QR) and, with
   ```sh
   curl "http://127.0.0.1:3338/sim/token?amount=<package-price-sats>"   # -> cashuA…
   ```
+  (The fake mint quotes `fee_reserve: 0`, so the exact price melts. A **real**
+  mint reserves a routing fee — send the price + ~1% the pay page shows, or the
+  melt is rejected as underfunded.)
 - **Cashu (NUT-18 receive)** — simulate a wallet POSTing to the transport target:
   ```sh
   curl -X POST http://127.0.0.1:8080/pay/<purchase-id>/cashu-receive \

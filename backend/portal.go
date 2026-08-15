@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -70,6 +71,7 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /proxy-priv.pac", p.pacFor("tor"))       // Privacy profile
 	mux.HandleFunc("GET /fips.pac", p.pacFor("clearnet"))        // back-compat alias
 	mux.HandleFunc("GET /packages", p.packagesPage)
+	mux.HandleFunc("GET /status", p.status)
 	mux.HandleFunc("POST /buy", p.buy)
 	mux.HandleFunc("GET /pay/{id}", p.payPage)
 	mux.HandleFunc("GET /pay/{id}/status", p.payStatus)
@@ -109,8 +111,14 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 	// its own QR — paying it POSTs a token to /pay/{id}/cashu-receive. The paste
 	// box works for wallets without NUT-18.
 	if p.cashu != nil && v.Bolt11 != "" {
+		// Ask for the invoice plus a 1% fee headroom: a Cashu melt needs proofs
+		// covering amount + the mint's fee_reserve, so a token equal to the bare
+		// price is rejected as underfunded (both the scanned request and the paste
+		// box must be sized this way).
+		meltSat := payments.MeltAmount(uint64(v.PriceMsat / 1000))
+		data["CashuAmount"] = meltSat
 		target := p.publicURL + "/pay/" + r.PathValue("id") + "/cashu-receive"
-		if req, err := p.cashu.PaymentRequest(uint64(v.PriceMsat/1000), target); err == nil {
+		if req, err := p.cashu.PaymentRequest(meltSat, target); err == nil {
 			data["CashuReq"] = req
 			data["CashuQR"] = qrDataURI(req)
 		}
@@ -123,35 +131,51 @@ func (p *portal) payPage(w http.ResponseWriter, r *http.Request) {
 // the purchase's invoice. Grant then flows via the phoenixd receipt like any
 // other payment. Unscoped by owner: paying only ever credits the purchase owner.
 func (p *portal) cashuReceive(w http.ResponseWriter, r *http.Request) {
+	// NUT-18 wallets parse this response as JSON, so every reply here must be
+	// JSON — a plain-text body makes the payer's wallet throw a JSON parse error
+	// ("Unexpected character: b" from "bad payload") instead of showing the real
+	// outcome.
 	if p.cashu == nil {
-		http.Error(w, "cashu payments not enabled", http.StatusNotFound)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "cashu payments not enabled"})
 		return
 	}
 	id := r.PathValue("id")
 	bolt11, status, err := p.store.PurchaseInvoice(r.Context(), id)
 	if err != nil {
-		http.Error(w, "purchase not found", http.StatusNotFound)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "purchase not found"})
 		return
 	}
 	if status == "settled" {
-		w.WriteHeader(http.StatusOK)
+		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 	if bolt11 == "" {
-		http.Error(w, "no lightning invoice for this purchase", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no lightning invoice for this purchase"})
 		return
 	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		log.Printf("portal: cashu-receive read body for purchase %s: %v", id, err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not read body"})
+		return
+	}
+	var meltErr error
 	var payload payments.PaymentRequestPayload
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
-		http.Error(w, "bad payload", http.StatusBadRequest)
+	if err := json.Unmarshal(body, &payload); err == nil && len(payload.Proofs) > 0 {
+		_, meltErr = p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Cashu(), bolt11)
+	} else {
+		// Fallback: some wallets POST a bare serialized token (cashuA…/cashuB…)
+		// rather than a NUT-18 JSON payload. Log why the JSON path was skipped so
+		// the real cause is visible, then try the body as a token.
+		log.Printf("portal: cashu-receive body for %s not a NUT-18 payload (err=%v, proofs=%d); trying as bare token", id, err, len(payload.Proofs))
+		_, meltErr = p.cashu.Melt(r.Context(), string(body), bolt11)
+	}
+	if meltErr != nil {
+		log.Printf("portal: cashu-receive melt for purchase %s: %v", id, meltErr)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "melt failed: " + meltErr.Error()})
 		return
 	}
-	if _, err := p.cashu.MeltProofs(r.Context(), payload.Mint, payload.Proofs, bolt11); err != nil {
-		log.Printf("portal: cashu-receive melt for purchase %s: %v", id, err)
-		http.Error(w, "melt failed", http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
 // payCashu redeems a pasted Cashu token by melting it (at the token's own mint)
@@ -381,9 +405,23 @@ func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := p.session(r); !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+	npub, ok := p.session(r)
+	if !ok {
+		// Direct-buy entry: /packages?npub=<npub> arriving over fips. Verify the
+		// claimed npub against the fd00::/8 source address and open a session, so
+		// a buyer can purchase without first visiting /login. Falls back to the
+		// bare source address when no npub is supplied (a known fips visitor).
+		npub, ok = p.transparentNpub(r)
+		if !ok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+			log.Printf("portal: packages CreateAccount(%s): %v", npub, err)
+			http.Error(w, "could not create account", http.StatusInternalServerError)
+			return
+		}
+		p.setSession(w, npub)
 	}
 	pkgs, err := p.store.ListPackages(r.Context())
 	if err != nil {
@@ -391,9 +429,65 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	services, _ := p.store.EnabledServices(r.Context()) // non-fatal; the explainer is optional
+	// Npub goes into the buy form as a hidden field so a cookie-less client
+	// (captive webview / script) still authenticates /buy against its fips source.
 	p.render(w, "packages.html", map[string]any{
-		"Packages": pkgs, "Services": services, "Pending": r.URL.Query().Get("pending") != "",
+		"Packages": pkgs, "Services": services, "Npub": npub, "Pending": r.URL.Query().Get("pending") != "",
 	})
+}
+
+// status is a machine-readable payment check for the direct-buy flow. It
+// identifies the caller — session cookie first, else a ?npub= claim verified
+// against the fips source address, else the bare fips source — and reports
+// whether that account has an active data package:
+//
+//	200 OK               — active package (JSON {"active":true,"expires_at":...})
+//	402 Payment Required — identified but no active package (JSON {"active":false,"buy_url":...})
+//	401 Unauthorized     — the caller can't be identified (no session, not on fips)
+//
+// A client polls this after sending a buyer to /packages?npub=<npub>; the flip
+// from 402 to 200 signals that the purchase has settled.
+func (p *portal) status(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	npub, ok := p.session(r)
+	if !ok {
+		npub, ok = p.transparentNpub(r)
+	}
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"active": false,
+			"error":  "cannot identify account: sign in, or request over fips with ?npub=<npub>",
+		})
+		return
+	}
+	active := false
+	var expiresAt time.Time
+	switch s, err := p.store.Summary(r.Context(), npub); {
+	case err == store.ErrAccountNotFound:
+		// A valid identity that simply has no account (never bought anything) yet.
+	case err != nil:
+		http.Error(w, "error loading account", http.StatusInternalServerError)
+		return
+	default:
+		for _, e := range s.Entitlements {
+			if e.Active {
+				active = true
+				if e.ExpiresAt.After(expiresAt) {
+					expiresAt = e.ExpiresAt // access lasts until the last active grant lapses
+				}
+			}
+		}
+	}
+	body := map[string]any{"active": active, "npub": npub}
+	if active {
+		if !expiresAt.IsZero() {
+			body["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+		}
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	body["buy_url"] = p.publicURL + "/packages?npub=" + url.QueryEscape(npub)
+	writeJSON(w, http.StatusPaymentRequired, body)
 }
 
 // help serves the public FAQ / help page. No session required — it's linked from
@@ -503,8 +597,20 @@ func (p *portal) pacFor(key string) http.HandlerFunc {
 func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 	npub, ok := p.session(r)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+		// Direct-buy: a cookie-less fips client (captive webview / script) posts
+		// its npub, verified against the fd00::/8 source address — no session
+		// round-trip required. Mirrors packagesPage's direct-buy entry, so buying
+		// works even when the client that hit /packages?npub= keeps no cookies.
+		npub, ok = p.transparentNpub(r)
+		if !ok {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
+			log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
+			http.Error(w, "could not create account", http.StatusInternalServerError)
+			return
+		}
 	}
 	ctx := r.Context()
 	packageID := strings.TrimSpace(r.FormValue("package_id"))
