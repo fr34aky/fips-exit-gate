@@ -335,6 +335,17 @@ func (p *portal) authFail(w http.ResponseWriter, jsonReq bool, msg string) {
 func (p *portal) authFips(w http.ResponseWriter, r *http.Request) {
 	npub, ok := p.transparentNpub(r)
 	if !ok {
+		// If they typed an npub over a valid fips source but it didn't verify,
+		// they most likely pasted a nostr npub instead of their fips npub. Re-render
+		// the entry form with a pointed message rather than a silent bounce.
+		if claim := strings.TrimSpace(r.FormValue("npub")); claim != "" && p.fipsSource(r) {
+			p.render(w, "login.html", map[string]any{
+				"FipsSource": true,
+				"Error": "That npub doesn't match your fips source address. Enter your fips npub — " +
+					"your fips node identity (from `fipsctl show identity-cache`), not a nostr login npub.",
+			})
+			return
+		}
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
