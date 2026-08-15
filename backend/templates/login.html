@@ -14,10 +14,15 @@
   <form method="post" action="/auth/fips"><button class="btn-lg">Continue as this identity</button></form>
 </div>{{else if .FipsSource}}<div class="banner good">
   <span class="step">Fastest — you're on fips</span>
-  <p style="margin:.35rem 0 .6rem">You're connecting over fips, so no signature is needed — just enter your
-  npub and we'll verify it against your fips address.</p>
+  <p style="margin:.35rem 0 .6rem">You're connecting over fips, so no signature is needed — enter your
+  <strong>fips npub</strong> and we'll verify it against your fips source address.</p>
+  <p class="muted" style="margin:.1rem 0 .6rem;font-size:.85em">That's your <strong>fips</strong> node identity —
+  <em>not</em> a nostr login. fips and nostr both use the <span class="mono">npub1…</span> format but are
+  different identities; a nostr npub won't match your fips address. Get yours with
+  <span class="mono">fipsctl show identity-cache</span>.</p>
+  {{if .Error}}<p class="err" style="margin:.1rem 0 .6rem">{{.Error}}</p>{{end}}
   <form method="post" action="/auth/fips" class="row">
-    <input type="text" name="npub" placeholder="npub1…" required style="flex:1;min-width:12rem">
+    <input type="text" name="npub" placeholder="fips npub1…" required style="flex:1;min-width:12rem">
     <input type="submit" value="Continue">
   </form>
 </div>{{end}}

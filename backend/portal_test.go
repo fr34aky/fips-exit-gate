@@ -200,6 +200,13 @@ func TestTransparentLogin(t *testing.T) {
 	if strings.Contains(strings.Join(rec.Result().Header["Set-Cookie"], ";"), sessionCookie) {
 		t.Fatal("spoofed npub claim was accepted")
 	}
+	// A mismatched claim over a fips source re-renders the entry form with a
+	// pointed message (enter your fips npub, not a nostr login), not a silent
+	// bounce — this is the common "pasted my nostr npub" mistake.
+	body := rec.Body.String()
+	if !strings.Contains(body, "fips npub") || !strings.Contains(body, "identity-cache") {
+		t.Fatalf("mismatched fips npub did not surface the fips-npub guidance; body=%q", body)
+	}
 	_ = ownerNpub
 }
 
