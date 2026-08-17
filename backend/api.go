@@ -134,7 +134,9 @@ func (h *handlers) usage(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.PathValue("id")
 	var req struct {
-		Version string `json:"version"`
+		Version  string `json:"version"`
+		AuthzRev int64  `json:"authz_rev"`
+		SetSize  int    `json:"set_size"`
 	}
 	_ = decodeQuiet(r, &req)
 	services, err := h.store.Heartbeat(r.Context(), nodeID, req.Version)
@@ -146,11 +148,23 @@ func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 	for _, s := range services {
 		svc = append(svc, map[string]any{"key": s.Key, "port": s.Port})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"config": map[string]any{
-		"usage_interval_s": h.usageIntervalS,
-		"grace_minutes":    h.graceMinutes,
-		"services":         svc,
-	}})
+	// Drift detection: if the node claims to be caught up (its rev matches ours)
+	// yet its live set size differs from authz_current, the node's kernel set has
+	// drifted out-of-band and its revision cursor can't detect it. Ask it to force
+	// a full reconcile. We only flag at an EQUAL revision so a node that is merely
+	// behind (and will catch up via the normal delta) isn't needlessly resynced.
+	resync := false
+	if count, rev, err := h.store.AuthzStatus(r.Context()); err == nil {
+		resync = req.AuthzRev == rev && req.SetSize != count
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config": map[string]any{
+			"usage_interval_s": h.usageIntervalS,
+			"grace_minutes":    h.graceMinutes,
+			"services":         svc,
+		},
+		"resync": resync,
+	})
 }
 
 func toMembers(ms []store.AuthzMember) []authzMemberJSON {

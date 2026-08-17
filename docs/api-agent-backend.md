@@ -28,7 +28,9 @@ Long-poll sync of the authorized-address set.
   `{ "rev": 413, "add": [ { "addr": "...", "account": "..." } ], "del": [ "fd54:..." ] }`
 - If the backend cannot produce a delta from `n` (compaction), it replies
   with a full set (`"full": true`). Agent applies atomically per response.
-- The agent additionally does a full refresh every 15 min as safety net.
+- The agent additionally forces a full refresh periodically (default 5 min) as
+  a safety net, and on demand when a heartbeat reports set drift (see below), so
+  an out-of-band kernel-set flush self-heals without a revision change.
 - The set is service-agnostic: an authorized address may use every egress
   service on the node (shared balance); only metering is per-service.
 
@@ -70,9 +72,17 @@ on `counter_epoch` change the backend treats counters as reset.
       { "key": "clearnet", "port": 1080 },
       { "key": "tor", "port": 1081 }
     ]
-  }
+  },
+  "resync": false
 }
 ```
+
+`resync` is `true` when the node reports `authz_rev` equal to the backend's
+current revision yet a `set_size` that disagrees with `authz_current` — i.e. the
+node's kernel set drifted out-of-band (an `nft` flush / table reload) and its
+revision cursor can't detect it. The agent responds by forcing a full reconcile.
+As a backstop, the agent also forces a periodic full reconcile on its own, so
+drift self-heals even if a heartbeat is missed.
 
 The `services` list is the node's egress catalog: the agent renders the
 nftables gate (authz check, captive redirect, per-service counters) from it,

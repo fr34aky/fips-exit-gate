@@ -34,12 +34,18 @@ type Agent struct {
 	nodeName    string
 	enrollToken string
 
+	// fullSyncEvery bounds how long the kernel set may silently drift from the
+	// backend before runSync forces a full reconcile even at an unchanged
+	// revision. Set once at construction; read-only afterwards.
+	fullSyncEvery time.Duration
+
 	mu                   sync.Mutex
 	cfg                  agentConfig
 	services             map[uint16]string // port -> service key
 	failClosedAfterGrace bool
 	bufferCap            int
 	lastAuthzOK          time.Time
+	forceResync          bool             // set by heartbeat when the backend reports drift
 	nowFn                func() time.Time // injectable for tests
 	metrics              *agentMetrics    // nil when metrics are disabled
 }
@@ -51,6 +57,7 @@ func newAgent(st *store, cl backend, fw Firewall, name, enrollToken string, fail
 		fw:                   fw,
 		nodeName:             name,
 		enrollToken:          enrollToken,
+		fullSyncEvery:        5 * time.Minute,
 		cfg:                  agentConfig{UsageIntervalS: 30, GraceMinutes: 240},
 		services:             map[uint16]string{},
 		failClosedAfterGrace: failClosed,
@@ -134,7 +141,21 @@ func (a *Agent) runSync(ctx context.Context) {
 	// answer "unchanged" and we'd never refill it. rev=0 pulls the full set, which
 	// applyAuthz diffs against the live kernel set and repairs.
 	forceFull := true
+	var lastFull time.Time
 	for ctx.Err() == nil {
+		// A revision counter only detects changes on the BACKEND side; it can't
+		// see the kernel set being flushed out-of-band (an `up.sh reload`, a
+		// manual `nft flush`, a table reload), which leaves rev unchanged while
+		// the set is wrong. So also force a full pull (a) periodically, so any
+		// such drift self-heals within fullSyncEvery, and (b) on demand when the
+		// backend's heartbeat spots a size mismatch. applyAuthz then diffs the
+		// full desired set against the live kernel set and repairs the difference.
+		if a.takeResync() {
+			forceFull = true
+		}
+		if !forceFull && a.now().Sub(lastFull) >= a.fullSyncEvery {
+			forceFull = true
+		}
 		rev := a.store.snapshotRuntime().AuthzRev
 		if forceFull {
 			rev = 0
@@ -142,6 +163,13 @@ func (a *Agent) runSync(ctx context.Context) {
 		resp, err := a.client.getAuthz(ctx, rev, 50)
 		switch {
 		case err == errUnchanged:
+			// Backend has nothing past rev. If we were attempting a periodic full
+			// reconcile, the pull with rev=0 already proved the kernel set is in
+			// sync (a change would have returned the full body), so record it.
+			if forceFull {
+				forceFull = false
+				lastFull = a.now()
+			}
 			a.markAuthzOK()
 			backoff.reset()
 		case err != nil:
@@ -156,11 +184,34 @@ func (a *Agent) runSync(ctx context.Context) {
 				sleep(ctx, backoff.next())
 				continue
 			}
-			forceFull = false
+			if forceFull {
+				forceFull = false
+				lastFull = a.now()
+			}
 			a.markAuthzOK()
 			backoff.reset()
 		}
 	}
+}
+
+// requestResync asks runSync to force a full reconcile on its next iteration.
+// Called from the heartbeat loop when the backend reports the exit's set size
+// disagrees with authz_current (kernel-side drift the revision can't detect).
+func (a *Agent) requestResync() {
+	a.mu.Lock()
+	a.forceResync = true
+	a.mu.Unlock()
+}
+
+// takeResync reports and clears a pending resync request.
+func (a *Agent) takeResync() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.forceResync {
+		a.forceResync = false
+		return true
+	}
+	return false
 }
 
 func (a *Agent) applyAuthz(resp authzResponse) error {
@@ -349,6 +400,10 @@ func (a *Agent) runHeartbeat(ctx context.Context) {
 		})
 		if err == nil {
 			a.applyConfig(resp.Config)
+			if resp.Resync {
+				log.Printf("agent: backend reported set drift (local=%d), forcing full reconcile", len(set))
+				a.requestResync()
+			}
 		}
 		if !sleep(ctx, 60*time.Second) {
 			return

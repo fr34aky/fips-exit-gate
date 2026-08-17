@@ -64,6 +64,10 @@ type serviceInfo struct {
 
 type heartbeatResponse struct {
 	Config agentConfig `json:"config"`
+	// Resync is set when the backend detects the exit's reported set size
+	// disagrees with authz_current at the same revision — i.e. the kernel set
+	// has drifted out-of-band. The agent responds by forcing a full reconcile.
+	Resync bool `json:"resync,omitempty"`
 }
 
 type agentConfig struct {
