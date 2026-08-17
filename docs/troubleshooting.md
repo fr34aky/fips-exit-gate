@@ -52,9 +52,12 @@ reload, which recreates the `authorized` set **empty** (it's seeded from
 unauthorized, so previously-working clients suddenly get the captive daemon — and
 because it can't intercept TLS, HTTPS fails as `curl: (35) OpenSSL SSL_connect:
 SSL_ERROR_SYSCALL` rather than an obvious redirect.
-**Fix:** restart the agent to force a full resync (`docker restart
-fips-exit-agent-1`), or wait for its next full-sync tick; confirm with
-`nft list set inet fips_exit authorized`.
+**Fix:** the agent now self-heals this — it forces a full reconcile every few
+minutes (and immediately when the backend's heartbeat spots the set-size
+mismatch), so the set refills on its own. To repair it instantly, restart the
+agent (`docker restart fips-exit-agent-1`); confirm with `nft list set inet
+fips_exit authorized`. If the set stays empty after a few minutes, the agent
+isn't running or can't reach the backend — check `docker logs` on the agent.
 
 ## Portal (or backend API) unreachable over fips, but SOCKS works
 

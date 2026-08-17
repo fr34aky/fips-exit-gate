@@ -258,3 +258,32 @@ func TestPurchaseSettleGrantsAuthz(t *testing.T) {
 		t.Fatalf("expected 1 entitlement for purchase, got %d", n)
 	}
 }
+
+// TestAuthzStatus checks the count+revision snapshot the heartbeat uses to
+// detect an exit whose kernel set has drifted from authz_current.
+func TestAuthzStatus(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	count, baseRev, err := st.AuthzStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("count=%d, want 0 on empty set", count)
+	}
+
+	if err := st.CreditTime(ctx, npubA, 1); err != nil {
+		t.Fatal(err)
+	}
+	count, rev, err := st.AuthzStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count=%d, want 1 after credit", count)
+	}
+	if rev <= baseRev {
+		t.Fatalf("rev did not advance after grant: %d <= %d", rev, baseRev)
+	}
+}

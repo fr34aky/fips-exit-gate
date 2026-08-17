@@ -286,3 +286,139 @@ type erroringBackend struct{ fakeBackend }
 func (b *erroringBackend) postUsage(context.Context, usageReport) (usageAck, error) {
 	return usageAck{}, context.DeadlineExceeded
 }
+
+// recordingBackend simulates a backend fixed at one revision with a known full
+// set: a rev=0 (full) request returns the set immediately, any other rev holds
+// briefly then reports "unchanged" — emulating the long-poll so the sync loop
+// paces itself instead of hot-spinning.
+type recordingBackend struct {
+	mu       sync.Mutex
+	full     authzResponse
+	hbResync bool
+	hbCalled chan struct{}
+}
+
+func (b *recordingBackend) setAuth(string, string) {}
+func (b *recordingBackend) enroll(context.Context, enrollRequest) (enrollResponse, error) {
+	return enrollResponse{NodeID: "node-test", AuthToken: "tok"}, nil
+}
+func (b *recordingBackend) getAuthz(ctx context.Context, rev int64, _ int) (authzResponse, error) {
+	if rev == 0 {
+		b.mu.Lock()
+		full := b.full
+		b.mu.Unlock()
+		return full, nil
+	}
+	select {
+	case <-ctx.Done():
+		return authzResponse{}, ctx.Err()
+	case <-time.After(2 * time.Millisecond):
+	}
+	return authzResponse{}, errUnchanged
+}
+func (b *recordingBackend) postUsage(context.Context, usageReport) (usageAck, error) {
+	return usageAck{}, nil
+}
+func (b *recordingBackend) heartbeat(context.Context, heartbeatRequest) (heartbeatResponse, error) {
+	b.mu.Lock()
+	resync, ch := b.hbResync, b.hbCalled
+	b.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return heartbeatResponse{Resync: resync}, nil
+}
+
+func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s: %s", d, what)
+}
+
+// A kernel flush that leaves the backend revision unchanged (an `up.sh reload`,
+// a manual `nft flush`) must self-heal: the revision cursor can't see it, so the
+// agent's periodic full reconcile has to notice and repair the drift.
+func TestPeriodicFullReconcileRepairsDrift(t *testing.T) {
+	fw := newFakeFirewall()
+	be := &recordingBackend{full: authzResponse{Rev: 5, Full: true,
+		Addresses: []authzMember{{Addr: mkAddr("fd00::1"), Account: "a1"}}}}
+	a := newTestAgent(t, be, fw)
+	a.fullSyncEvery = 10 * time.Minute
+
+	var clk sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	a.nowFn = func() time.Time { clk.Lock(); defer clk.Unlock(); return now }
+	advance := func(d time.Duration) { clk.Lock(); now = now.Add(d); clk.Unlock() }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.ensureEnrolled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	go a.runSync(ctx)
+
+	// Startup reconcile grants the address.
+	waitFor(t, time.Second, "startup grant", func() bool { return fw.has(mkAddr("fd00::1")) })
+
+	// Out-of-band flush; backend rev stays 5, so the delta poll returns nothing.
+	_ = fw.ApplyAuthorized(nil, []netip.Addr{mkAddr("fd00::1")})
+	if fw.has(mkAddr("fd00::1")) {
+		t.Fatal("flush did not clear the set")
+	}
+
+	// Past fullSyncEvery the agent must force a full pull and repair the drift.
+	advance(11 * time.Minute)
+	waitFor(t, time.Second, "periodic repair", func() bool { return fw.has(mkAddr("fd00::1")) })
+}
+
+// A backend-signalled resync (heartbeat spotted a size mismatch) forces a full
+// reconcile even before the periodic timer would fire.
+func TestResyncRequestForcesFullReconcile(t *testing.T) {
+	fw := newFakeFirewall()
+	be := &recordingBackend{full: authzResponse{Rev: 7, Full: true,
+		Addresses: []authzMember{{Addr: mkAddr("fd00::9"), Account: "a9"}}}}
+	a := newTestAgent(t, be, fw)
+	a.fullSyncEvery = time.Hour // ensure only the resync path can repair during the test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.ensureEnrolled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	go a.runSync(ctx)
+
+	waitFor(t, time.Second, "startup grant", func() bool { return fw.has(mkAddr("fd00::9")) })
+	_ = fw.ApplyAuthorized(nil, []netip.Addr{mkAddr("fd00::9")})
+
+	a.requestResync()
+	waitFor(t, time.Second, "resync repair", func() bool { return fw.has(mkAddr("fd00::9")) })
+}
+
+// The heartbeat loop must turn a backend Resync response into a pending resync
+// request that runSync will pick up.
+func TestHeartbeatResyncSetsFlag(t *testing.T) {
+	fw := newFakeFirewall()
+	called := make(chan struct{}, 1)
+	be := &recordingBackend{hbResync: true, hbCalled: called}
+	a := newTestAgent(t, be, fw)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go a.runHeartbeat(ctx)
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("heartbeat was not called")
+	}
+	cancel()
+	waitFor(t, time.Second, "resync flag set", func() bool { return a.takeResync() })
+}

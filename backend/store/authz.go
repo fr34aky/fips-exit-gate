@@ -106,6 +106,21 @@ func (s *Store) FullSet(ctx context.Context) ([]AuthzMember, int64, error) {
 	return out, rev, nil
 }
 
+// AuthzStatus returns the current authorized-set size and revision, read in one
+// snapshot so a node heartbeat can reliably compare its live kernel set against
+// the backend at a consistent point. A size mismatch at an equal revision means
+// the node's set has drifted out-of-band (e.g. an nftables flush) — the caller
+// uses this to ask the node to force a full reconcile.
+func (s *Store) AuthzStatus(ctx context.Context) (count int, rev int64, err error) {
+	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT count(*) FROM authz_current`).Scan(&count)
+	})
+	return count, rev, err
+}
+
 // DeltaSince returns the net add/del since clientRev by replaying the revision
 // log (so an add-then-del of the same address collapses correctly). The rows
 // and the returned revision are read in ONE snapshot (readTxRR): the revision

@@ -70,9 +70,17 @@ on `counter_epoch` change the backend treats counters as reset.
       { "key": "clearnet", "port": 1080 },
       { "key": "tor", "port": 1081 }
     ]
-  }
+  },
+  "resync": false
 }
 ```
+
+`resync` is `true` when the node reports `authz_rev` equal to the backend's
+current revision yet a `set_size` that disagrees with `authz_current` — i.e. the
+node's kernel set drifted out-of-band (an `nft` flush / table reload) and its
+revision cursor can't detect it. The agent responds by forcing a full reconcile.
+As a backstop, the agent also forces a periodic full reconcile on its own, so
+drift self-heals even if a heartbeat is missed.
 
 The `services` list is the node's egress catalog: the agent renders the
 nftables gate (authz check, captive redirect, per-service counters) from it,
