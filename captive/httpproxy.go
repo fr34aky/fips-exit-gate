@@ -11,7 +11,7 @@ import (
 
 // The captive daemon is one listener behind the nftables gate, which redirects
 // every unauthorized service port to it. SOCKS service ports (e.g. :1080) arrive
-// speaking SOCKS5; an HTTP-proxy service port (e.g. :8080) arrives speaking the
+// speaking SOCKS5; an HTTP-proxy service port (e.g. :3128) arrives speaking the
 // HTTP proxy protocol directly — no SOCKS handshake. handle() peeks the first
 // byte to tell them apart (0x05 => SOCKS) and routes non-SOCKS clients here.
 //

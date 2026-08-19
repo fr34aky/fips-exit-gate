@@ -2,7 +2,7 @@
 
 The exit's egress services have so far all been SOCKS endpoints (clearnet via the
 dispatcher on `:1080`, Tor on `:1081`). This adds an **HTTP forward proxy** on
-`:8080` for clients and operating systems that can point at an HTTP proxy but not
+`:3128` for clients and operating systems that can point at an HTTP proxy but not
 a SOCKS one (system proxy settings, many corporate/managed clients, some CLI
 tools). Functionally it egresses the same clearnet path as `:1080`; it exists for
 **client compatibility**, not new reach.
@@ -10,7 +10,7 @@ tools). Functionally it egresses the same clearnet path as `:1080`; it exists fo
 ```
 fips client ──┬─ :1080 SOCKS ─▶ dispatch ─▶ Dante ─▶ clearnet   rate 1.0x ┐
               ├─ :1081 SOCKS ─▶ Tor              ─▶ Tor network  rate 1.5x ┤─ one balance
-              └─ :8080 HTTP  ─▶ httpproxy ─▶ Dante ─▶ clearnet   rate 1.0x ┘
+              └─ :3128 HTTP  ─▶ httpproxy ─▶ Dante ─▶ clearnet   rate 1.0x ┘
                     ▲              (forwards every request over loopback SOCKS)
               same nft gate (authorized → service, else → captive)
               same acct counters, keyed (addr, port)
@@ -28,7 +28,7 @@ all blocked, and **DNS resolved server-side** (the hostname is forwarded to
 Dante, not resolved on the proxy). Onion routing is *not* offered on the HTTP
 port — use the SOCKS connectivity port (`:1080`) for `.onion`.
 
-It binds `EXIT_FIPS_ADDR:8080` only, never the public interface — an HTTP proxy
+It binds `EXIT_FIPS_ADDR:3128` only, never the public interface — an HTTP proxy
 open to the internet would be abused instantly. The nft gate is the primary
 control (only authorized fips sources reach the port); the fips-only bind is
 defence in depth.
@@ -40,7 +40,7 @@ SOCKS endpoint, the HTTP proxy is the **first non-SOCKS service** — so it touc
 exactly one shared component:
 
 - **`deploy/render-nftables.sh`** — unchanged. It templates the gate + `acct`
-  counters over every port in `services.conf`; `http 8080` just adds `8080` to
+  counters over every port in `services.conf`; `http 3128` just adds `3128` to
   `dport { … }` and both acct chains. The byte counters are protocol-agnostic.
 - **exit-agent** — unchanged. It maps `port → service key` from the heartbeat
   catalog and reads the `(addr, port)` `acct` set; a new port is a new service.
@@ -56,7 +56,7 @@ exactly one shared component:
 
 ## Enabling the HTTP proxy on an exit node
 
-All three go together (the gate must list `:8080` only when something
+All three go together (the gate must list `:3128` only when something
 authorized-only is actually listening there):
 
 1. **Register the catalog row** (backend, once — the agent picks it up on its
@@ -64,11 +64,11 @@ authorized-only is actually listening there):
 
    ```sh
    curl -H "Authorization: Bearer $ADMIN_TOKEN" -XPOST $URL/admin/services \
-     -d '{"key":"http","name":"HTTP proxy","port":8080,"rate_ppm":1000000}'
+     -d '{"key":"http","name":"HTTP proxy","port":3128,"rate_ppm":1000000}'
    curl -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/services   # verify
    ```
 
-2. **Run the HTTP proxy** (exit host). It binds `EXIT_FIPS_ADDR:8080` only and
+2. **Run the HTTP proxy** (exit host). It binds `EXIT_FIPS_ADDR:3128` only and
    forwards to Dante over loopback:
 
    ```sh
@@ -76,12 +76,12 @@ authorized-only is actually listening there):
    docker compose -f docker-compose.yaml --profile http up -d httpproxy
    ```
 
-3. **Gate + meter the port** (exit host): uncomment `http 8080` in
+3. **Gate + meter the port** (exit host): uncomment `http 3128` in
    `deploy/services.conf`, then re-render:
 
    ```sh
    sudo ./up.sh reload      # re-render nftables from services.conf; nft -c validates
-   sudo nft list table inet fips_exit | grep 8080   # confirm the port is gated
+   sudo nft list table inet fips_exit | grep 3128   # confirm the port is gated
    ```
 
 To disable, reverse all three: comment the `services.conf` line +
@@ -95,14 +95,14 @@ separate peer, not the exit host):
 
 ```sh
 # HTTPS via CONNECT — exits as the node's public IP, DNS resolved server-side.
-curl -x http://$EXIT_FIPS_ADDR:8080 https://ifconfig.co
+curl -x http://$EXIT_FIPS_ADDR:3128 https://ifconfig.co
 
 # Plaintext via absolute-form GET.
-curl -x http://$EXIT_FIPS_ADDR:8080 http://ifconfig.co
+curl -x http://$EXIT_FIPS_ADDR:3128 http://ifconfig.co
 
 # An UNAUTHORIZED client gets the captive 302 on plain HTTP, and a clean refusal
 # on HTTPS (CONNECT) — exactly the captive behaviour of the SOCKS ports.
-curl -x http://$EXIT_FIPS_ADDR:8080 http://example.com   # -> 302 to the portal
+curl -x http://$EXIT_FIPS_ADDR:3128 http://example.com   # -> 302 to the portal
 ```
 
 Then confirm the balance drained under the `http` service on the dashboard's

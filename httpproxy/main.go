@@ -1,5 +1,5 @@
 // Command httpproxy is a fips-exit egress service: an HTTP forward proxy on the
-// connectivity-style model. It listens on a service port (fips address :8080)
+// connectivity-style model. It listens on a service port (fips address :3128)
 // and speaks the HTTP proxy protocol to the client — plaintext requests
 // (absolute-form GET/POST/...) and CONNECT tunnels (HTTPS) — forwarding every
 // request to an upstream SOCKS proxy (Dante over loopback) rather than
@@ -41,7 +41,7 @@ type config struct {
 
 func loadConfig() config {
 	return config{
-		listen:            getenv("HTTPPROXY_LISTEN", "[::1]:8080"),
+		listen:            getenv("HTTPPROXY_LISTEN", "[::1]:3128"),
 		upstream:          getenv("HTTPPROXY_UPSTREAM", "127.0.0.1:1090"),
 		dialTimeout:       time.Duration(getenvInt("HTTPPROXY_DIAL_TIMEOUT_S", 15)) * time.Second,
 		readHeaderTimeout: time.Duration(getenvInt("HTTPPROXY_READ_HEADER_TIMEOUT_S", 15)) * time.Second,

@@ -100,7 +100,7 @@ func handle(conn net.Conn, cfg config, m *captiveMetrics) {
 
 	// One captive listener serves every redirected service port. SOCKS ports
 	// (e.g. :1080) arrive as a SOCKS5 greeting (first byte 0x05); HTTP-proxy
-	// ports (e.g. :8080) arrive speaking HTTP directly. Peek to tell them apart,
+	// ports (e.g. :3128) arrive speaking HTTP directly. Peek to tell them apart,
 	// then hand the buffered reader to the matching path.
 	bc := &bufConn{Conn: conn, r: bufio.NewReader(conn)}
 	first, err := bc.r.Peek(1)
