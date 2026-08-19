@@ -103,6 +103,59 @@ func TestServeRedirectNonHTTP(t *testing.T) {
 	}
 }
 
+func TestServeProxyRedirectPlainHTTP(t *testing.T) {
+	src := netip.MustParseAddr("fd10:93b2:8586:6046:e42d:c089:3228:ccff")
+	secret := []byte("test-secret")
+	exp := time.Now().Add(time.Minute).Unix()
+	// Absolute-form proxy request (what an HTTP-proxy client sends).
+	req := "GET http://neverssl.com/path HTTP/1.1\r\nHost: neverssl.com\r\n\r\n"
+	x := &rw{in: strings.NewReader(req)}
+
+	ok, err := serveProxyRedirect(x, src, "https://portal.example/captive", secret, exp)
+	if err != nil || !ok {
+		t.Fatalf("serveProxyRedirect: ok=%v err=%v", ok, err)
+	}
+	resp := x.out.String()
+	if !strings.HasPrefix(resp, "HTTP/1.1 302") {
+		t.Fatalf("expected 302, got: %q", resp)
+	}
+	loc := locationHeader(t, resp)
+	if !strings.Contains(loc, "dest=neverssl.com") {
+		t.Fatalf("expected dest from absolute-form target: %s", loc)
+	}
+	gotAddr, err := verifyToken(secret, extractQuery(loc, "t"), time.Now().Unix())
+	if err != nil || gotAddr != src {
+		t.Fatalf("token addr = %s (err %v), want %s", gotAddr, err, src)
+	}
+}
+
+func TestServeProxyRedirectRefusesConnect(t *testing.T) {
+	// CONNECT (HTTPS tunnel) cannot be redirected: no bytes, no error.
+	x := &rw{in: strings.NewReader("CONNECT neverssl.com:443 HTTP/1.1\r\nHost: neverssl.com:443\r\n\r\n")}
+	ok, err := serveProxyRedirect(x, netip.MustParseAddr("fd00::1"), "https://p/", []byte("s"), time.Now().Add(time.Minute).Unix())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if ok {
+		t.Fatalf("CONNECT should not be redirected")
+	}
+	if x.out.Len() != 0 {
+		t.Fatalf("expected no response for CONNECT, got %q", x.out.String())
+	}
+}
+
+func TestServeProxyRedirectNonHTTP(t *testing.T) {
+	// A stray TLS ClientHello on the HTTP-proxy port: not a proxy request line.
+	x := &rw{in: bytes.NewReader([]byte{0x16, 0x03, 0x01, 0x00, 0x2a})}
+	ok, err := serveProxyRedirect(x, netip.MustParseAddr("fd00::1"), "https://p/", []byte("s"), time.Now().Add(time.Minute).Unix())
+	if err != nil || ok {
+		t.Fatalf("non-HTTP should not redirect: ok=%v err=%v", ok, err)
+	}
+	if x.out.Len() != 0 {
+		t.Fatalf("expected no response for non-HTTP, got %q", x.out.String())
+	}
+}
+
 func TestTokenTamperAndExpiry(t *testing.T) {
 	secret := []byte("s3cr3t")
 	src := netip.MustParseAddr("fd00::abcd")
