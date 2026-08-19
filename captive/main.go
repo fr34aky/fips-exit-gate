@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"log"
@@ -95,12 +96,29 @@ func handle(conn net.Conn, cfg config, m *captiveMetrics) {
 	_ = conn.SetDeadline(time.Now().Add(cfg.ioTimeout))
 
 	src := sourceAddr(conn)
-	if err := socksAccept(conn); err != nil {
-		m.refuse() // malformed or non-CONNECT; SOCKS error already sent where relevant
+	exp := time.Now().Add(tokenTTLSeconds * time.Second).Unix()
+
+	// One captive listener serves every redirected service port. SOCKS ports
+	// (e.g. :1080) arrive as a SOCKS5 greeting (first byte 0x05); HTTP-proxy
+	// ports (e.g. :8080) arrive speaking HTTP directly. Peek to tell them apart,
+	// then hand the buffered reader to the matching path.
+	bc := &bufConn{Conn: conn, r: bufio.NewReader(conn)}
+	first, err := bc.r.Peek(1)
+	if err != nil {
+		m.refuse()
 		return
 	}
-	exp := time.Now().Add(tokenTTLSeconds * time.Second).Unix()
-	redirected, _ := serveRedirect(conn, src, cfg.portalURL, cfg.secret, exp)
+
+	var redirected bool
+	if first[0] == socksVersion {
+		if err := socksAccept(bc); err != nil {
+			m.refuse() // malformed or non-CONNECT; SOCKS error already sent where relevant
+			return
+		}
+		redirected, _ = serveRedirect(bc, src, cfg.portalURL, cfg.secret, exp)
+	} else {
+		redirected, _ = serveProxyRedirect(bc, src, cfg.portalURL, cfg.secret, exp)
+	}
 	if redirected {
 		m.redirect()
 	} else {
@@ -108,6 +126,16 @@ func handle(conn net.Conn, cfg config, m *captiveMetrics) {
 	}
 	// Whether or not we redirected, we are done: close the connection.
 }
+
+// bufConn is a net.Conn whose reads are served from a buffered reader, so the
+// first byte can be peeked (to select the SOCKS vs HTTP-proxy path) without
+// consuming it. Writes go straight to the underlying conn.
+type bufConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
 // sourceAddr returns the client's real source address. nftables `redirect`
 // only rewrites the destination, so RemoteAddr still carries the fips source.

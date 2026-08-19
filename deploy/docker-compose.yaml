@@ -114,6 +114,27 @@ services:
       retries: 3
       start_period: 90s
 
+  # Optional egress service — an HTTP forward proxy on :8080 for clients/OSes
+  # that speak HTTP proxy but not SOCKS. It carries no egress policy of its own:
+  # it forwards every request (plaintext + CONNECT) to Dante over loopback, so it
+  # inherits the full policy + server-side DNS. Binds EXIT_FIPS_ADDR only (never
+  # the public interface — that would be an open proxy); the nft gate lets only
+  # authorized fips sources reach it. Enable with `--profile http`, together with
+  # uncommenting `http 8080` in services.conf and registering the catalog row —
+  # see docs/http-proxy.md.
+  httpproxy:
+    build:
+      context: ..
+      dockerfile: httpproxy/Dockerfile
+    image: fips-exit/httpproxy:dev
+    profiles: ["http"]
+    network_mode: host
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      HTTPPROXY_LISTEN: "[${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}]:${HTTPPROXY_PORT:-8080}"
+      HTTPPROXY_UPSTREAM: "127.0.0.1:${CLEARNET_PORT:-1090}"
+
   captive:
     build:
       context: ..

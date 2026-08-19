@@ -34,6 +34,12 @@ func serveRedirect(rw io.ReadWriter, src netip.Addr, portalBase string, secret [
 	}
 	host := hostFromHeaders(br)
 	location := buildPortalURL(portalBase, src, host, secret, expUnix)
+	return writeRedirect(rw, location)
+}
+
+// writeRedirect writes a plain-text 302 to location and reports that a redirect
+// was issued. Shared by the SOCKS and HTTP-proxy captive paths.
+func writeRedirect(rw io.Writer, location string) (bool, error) {
 	body := "Redirecting to the fips-exit portal.\n"
 	resp := "HTTP/1.1 302 Found\r\n" +
 		"Location: " + location + "\r\n" +
