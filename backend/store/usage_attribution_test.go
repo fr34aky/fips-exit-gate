@@ -27,12 +27,10 @@ func TestUsageAttributedToLastHolderAfterRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Revoke (disable the owner entry) so the address is gone from authz_current.
-	if err := st.SetWhitelistEnabled(ctx, npubA, npubA, false); err != nil {
-		t.Fatal(err)
-	}
+	// Revoke (suspend the account) so the address is gone from authz_current.
+	setAccountActive(t, st, npubA, false)
 	if setContains(mustFullSet(t, st), addrA) {
-		t.Fatal("still authorized after disable")
+		t.Fatal("still authorized after suspend")
 	}
 
 	// A late report for that address.
@@ -57,5 +55,23 @@ func TestUsageAttributedToLastHolderAfterRevocation(t *testing.T) {
 	}
 	if used != 5_000 {
 		t.Fatalf("volume_used = %d, want 5000 (late usage must still draw down the package)", used)
+	}
+}
+
+// setAccountActive flips the account's status and recomputes the authorized
+// set: the one revocation that no whitelist rule can undo (disabling an
+// owner's own row is reverted when the address is active nowhere else).
+func setAccountActive(t *testing.T, st *Store, npub string, active bool) {
+	t.Helper()
+	status := "suspended"
+	if active {
+		status = "active"
+	}
+	if _, err := st.pool.Exec(context.Background(),
+		`UPDATE accounts SET status = $2 WHERE npub = $1`, npub, status); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.RecomputeAuthz(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

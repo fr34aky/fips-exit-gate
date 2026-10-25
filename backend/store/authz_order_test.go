@@ -62,7 +62,14 @@ func TestRevisionsCommitInOrderUnderConcurrentRecomputes(t *testing.T) {
 		go func(i int, np string) {
 			defer writers.Done()
 			for r := 0; r < rounds; r++ {
-				_ = st.SetWhitelistEnabled(ctx, np, np, (r+i)%2 == 0)
+				status := "suspended"
+				if (r+i)%2 == 0 {
+					status = "active"
+				}
+				if _, err := st.pool.Exec(ctx, `UPDATE accounts SET status = $2 WHERE npub = $1`, np, status); err != nil {
+					continue
+				}
+				_, _, _ = st.RecomputeAuthz(ctx)
 			}
 		}(i, np)
 	}
