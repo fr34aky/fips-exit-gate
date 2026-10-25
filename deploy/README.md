@@ -26,7 +26,8 @@ sudo -E ./up.sh up                        # renders+validates+loads nftables, st
 
 `up.sh` runs `nft -c -f` before loading, so a malformed ruleset fails safely
 without touching the live firewall. To change the allowlist or service list
-later, edit the file(s) and `sudo -E ./up.sh reload`.
+later, edit the file(s) and `sudo -E ./up.sh reload`. The rendered ruleset is
+written to `/etc/nftables.d/fips-exit.nft`; set `NFT_FILE` to put it elsewhere.
 
 > **Note:** the nftables ruleset is rendered from `services.conf` — this is the
 > modularity seam. Adding the Tor service (Phase 4b) is one line in
