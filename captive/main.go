@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"log"
 	"net"
 	"net/netip"
@@ -45,6 +46,7 @@ func loadConfig() (config, error) {
 }
 
 func main() {
+	logging.Setup("captive")
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("captive: config: %v", err)

@@ -40,6 +40,32 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Ready reports whether the database answers and every embedded migration
+// has been applied — the readiness check for /readyz.
+func (s *Store) Ready(ctx context.Context) error {
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("db: %w", err)
+	}
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		var ok bool
+		if err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, e.Name()).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("migration %s not applied", e.Name())
+		}
+	}
+	return nil
+}
+
 // migrate applies embedded .sql files in lexical order, tracked in a table.
 func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (

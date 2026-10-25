@@ -210,6 +210,13 @@ account).
 **Fix:** disable it on the other account first, or accept that its traffic is
 attributed where it's currently active.
 
+## Is the backend healthy?
+
+`curl -s http://<backend>:8080/healthz` (process up) and
+`curl -s http://<backend>:8080/readyz` (database reachable, all migrations
+applied; 503 with the reason otherwise). After an upgrade, `readyz` turning
+green is the signal that migrations ran.
+
 ## Backend won't start
 
 - `DATABASE_URL is required` / `ADMIN_TOKEN is required`: set them.

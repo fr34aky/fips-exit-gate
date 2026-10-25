@@ -19,6 +19,13 @@ Copy each to the name without `.example`, `chmod 600`, and fill it in.
 
 ---
 
+## Logging (every binary)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOG_FORMAT` | `text` | `json` for one JSON record per line (`time`, `level`, `msg`, `service`). |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+
 ## Backend
 
 Read by `backend/` (see `backend/main.go`).

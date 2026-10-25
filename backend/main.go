@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 )
 
 func main() {
+	logging.Setup("backend")
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("backend: DATABASE_URL is required")
@@ -154,6 +156,25 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	if m != nil {
 		mux.HandleFunc("GET /metrics", serveMetrics(m, metricsToken))
 	}
+
+	// Liveness / readiness (no auth, no body of interest): /healthz says the
+	// process serves requests; /readyz additionally checks the database and
+	// that every migration is applied. For load balancers and compose/systemd
+	// health checks.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := st.Ready(ctx); err != nil {
+			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready\n"))
+	})
 
 	// Agent API: enroll is unauthenticated (uses the enroll token in-body);
 	// the rest require the node's bearer auth token.

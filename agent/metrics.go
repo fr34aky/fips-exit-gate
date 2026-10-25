@@ -25,6 +25,9 @@ type agentMetrics struct {
 	usageSent       *metrics.Counter
 	usageDropped    *metrics.Counter
 	usageBuffered   *metrics.Gauge
+	usageCollected  *metrics.Gauge   // unix time of the last successful counter read
+	usageBytes      *metrics.Counter // bytes collected from the acct counters (all services)
+	collectErrors   *metrics.Counter
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -41,6 +44,9 @@ func newAgentMetrics() *agentMetrics {
 		usageSent:       r.Counter("fipsexit_agent_usage_reports_sent_total", "Usage reports delivered to the backend"),
 		usageDropped:    r.Counter("fipsexit_agent_usage_reports_dropped_total", "Usage reports dropped (buffer full)"),
 		usageBuffered:   r.Gauge("fipsexit_agent_usage_reports_buffered", "Usage reports currently buffered on disk"),
+		usageCollected:  r.Gauge("fipsexit_agent_usage_last_collect_seconds", "Unix time of the last successful read of the acct counters"),
+		usageBytes:      r.Counter("fipsexit_agent_usage_bytes_total", "Bytes collected from the acct counters since start (all services)"),
+		collectErrors:   r.Counter("fipsexit_agent_usage_collect_errors_total", "Failed reads of the acct counters"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -87,6 +93,19 @@ func (m *agentMetrics) usageDrop(n int) {
 		return
 	}
 	m.usageDropped.Add(float64(n))
+}
+func (m *agentMetrics) collected(bytes uint64, now time.Time) {
+	if m == nil {
+		return
+	}
+	m.usageCollected.Set(float64(now.Unix()))
+	m.usageBytes.Add(float64(bytes))
+}
+func (m *agentMetrics) collectErr() {
+	if m == nil {
+		return
+	}
+	m.collectErrors.Inc()
 }
 func (m *agentMetrics) setBuffered(n int) {
 	if m == nil {

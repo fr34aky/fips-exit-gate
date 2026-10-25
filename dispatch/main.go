@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"io"
 	"log"
 	"net"
@@ -51,6 +52,7 @@ func loadConfig() config {
 }
 
 func main() {
+	logging.Setup("dispatch")
 	cfg := loadConfig()
 	ln, err := net.Listen("tcp", cfg.listen)
 	if err != nil {

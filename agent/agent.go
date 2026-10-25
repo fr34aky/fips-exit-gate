@@ -283,6 +283,7 @@ func (a *Agent) runUsage(ctx context.Context) {
 	}
 	for ctx.Err() == nil {
 		if err := a.collectAndBuffer(); err != nil {
+			a.metrics.collectErr()
 			log.Printf("agent: collect usage: %v", err)
 		}
 		a.flushBuffer(ctx)
@@ -313,6 +314,11 @@ func (a *Agent) collectAndBuffer() error {
 		samples, next := computeDelta(rt.Baselines, cur, services)
 		rt.Baselines = next
 		rt.CounterEpoch = epoch
+		var total uint64
+		for _, s := range samples {
+			total += s.Bytes
+		}
+		a.metrics.collected(total, a.now())
 		if len(samples) == 0 {
 			return
 		}

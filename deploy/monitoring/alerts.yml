@@ -36,14 +36,16 @@ groups:
         annotations:
           summary: "agent on {{ $labels.instance }} can't reach the backend (fail-open active)"
 
-      # Authorized users exist but no usage was reported recently — a likely
-      # counter stall or accounting break.
+      # The agent has not managed to read the acct counters recently — the
+      # table is missing, nft is failing, or the usage loop is stuck. (Idle
+      # customers are NOT a stall: an agent with no traffic sends no reports,
+      # which is why this measures the collection, not the reports.)
       - alert: FipsExitUsageStalled
-        expr: increase(fipsexit_agent_usage_reports_sent_total[15m]) == 0 and fipsexit_agent_authorized_addresses > 0
-        for: 15m
+        expr: time() - fipsexit_agent_usage_last_collect_seconds > 300
+        for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "agent on {{ $labels.instance }} has authorized users but reported no usage in 15m"
+          summary: "agent on {{ $labels.instance }} has not read its usage counters for > 5m"
 
       # Usage is piling up on disk — backend delivery is failing.
       - alert: FipsExitUsageBuffering

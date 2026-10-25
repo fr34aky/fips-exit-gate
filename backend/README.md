@@ -40,8 +40,9 @@ in a stateless HMAC-signed session cookie keyed to the npub:
   any signer incl. Amber by pasting the signed event); `POST /auth/verify`
   checks the Schnorr signature (`backend/nostr`), the challenge HMAC, and
   freshness.
-- **Transparent fips-source** (`POST /auth/fips`, off by default) — when
-  `PORTAL_TRUST_FIPS_SOURCE=1` and the request arrives from an fd00::/8 source,
+- **Transparent fips-source** (`POST /auth/fips`, **on by default**; set
+  `PORTAL_TRUST_FIPS_SOURCE=0` behind a source-masking reverse proxy) — when
+  enabled and the request arrives from an fd00::/8 source,
   the npub-derived source address authenticates the identity with no signature.
   A `?npub=` claim is accepted only if it derives to the trusted source address
   (`fipsaddr.CheckDerivation`). Enable only on a fips-bound listener with no

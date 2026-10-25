@@ -42,8 +42,9 @@ package_types            -- the catalog (admin-managed)
   name          text                      -- "50 GB / 90 days", "1 month pass"
   volume_bytes  bigint null               -- volume kind
   validity_days int not null              -- volume: expiry window; time: pass length
-  price_eur_cents int not null            -- reference price; BTCPay converts
-                                          -- to BTC/LN/XMR at invoice time
+  price_msat    bigint not null           -- price in millisatoshi (shown as sats;
+                                          -- BTCPay/phoenixd invoice this amount)
+  available_until timestamptz null        -- promo window; hidden afterwards
   active        bool
 
 purchases                -- one per BTCPay invoice
@@ -79,7 +80,6 @@ services                 -- modular egress catalog (clearnet, tor, ...)
   rate_ppm      bigint not null           -- consumption rate, parts-per-million:
                                           -- 1_000_000 = 1.0x, 1_500_000 = 1.5x;
                                           -- balance -= bytes * rate_ppm / 1e6
-  backend       text                      -- "dante" | "tor-socks" | ... (informational)
   enabled       bool
 ```
 
@@ -104,14 +104,24 @@ usage_reports            -- idempotency ledger, one row per agent report
   window_end    timestamptz
   received_at
 
-usage_samples            -- per-address, per-service deltas, partitioned by month
-  report_id     fk -> usage_reports
-  service_id    fk -> services
+usage_samples            -- per-address, per-service deltas (one row per 30 s window)
+  report_id     fk -> usage_reports       -- ON DELETE CASCADE
+  service_id    fk -> services (null = unknown service key)
   fips_addr     inet
   account_id    fk null                   -- resolved at ingest; null if unknown
   bytes         bigint                    -- metered total (both directions);
                                           -- weighted consumption =
                                           -- bytes * services.rate_ppm / 1e6
+  -- NOT partitioned. Rows older than RETENTION_DAYS (90) are rolled up into
+  -- usage_daily and deleted with their reports (backend retention job).
+
+usage_daily              -- per-account, per-service, per-day totals (the roll-up)
+  account_id    fk -> accounts
+  service_id    fk -> services
+  day           date
+  bytes         bigint
+  pk (account_id, day, service_id)
+  -- dashboard and metrics totals = usage_samples + usage_daily
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -119,19 +129,17 @@ authz_revisions          -- append-only log driving the agent delta sync
   fips_addr     inet
   account_id    fk
   created_at
-  -- compacted periodically; full set = view over accounts/whitelist/entitlements
+  -- compacted after REVISION_RETENTION_DAYS (30): rows older than that are
+  -- deleted, always keeping the newest (max(rev) is the global revision); an
+  -- agent whose cursor predates the kept range is handed the full set, which
+  -- it reconciles against its kernel set.
 ```
 
 ## Portal sessions
 
-```
-sessions
-  id            pk (random 256-bit)
-  npub          text not null             -- acting identity
-  account_id    fk null                   -- resolved account (owner or via whitelist)
-  method        fips|nip07|nip55|nip46|manual
-  created_at, expires_at
-```
+There is no sessions table. A session is a stateless HMAC-signed cookie
+(`backend/session.go`: npub + expiry, 7-day TTL, HttpOnly, SameSite=Lax);
+logout clears the cookie. Rotating `SESSION_SECRET` invalidates every session.
 
 ## Invariants worth enforcing in code
 
