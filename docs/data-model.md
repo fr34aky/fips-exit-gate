@@ -20,13 +20,22 @@ whitelist_entries        -- npubs allowed to consume the account's packages
   fips_addr     inet not null             -- derived
   role          owner|guest               -- owner row auto-created with account
   enabled       bool default true
+  pending       bool default false        -- guest invitation not yet accepted by
+                                          -- the invited npub; a pending row never
+                                          -- authorizes, resolves a source, or
+                                          -- occupies the address
   label         text                      -- user-facing note ("laptop", "alice")
   created_at
   unique (account_id, npub)
-  unique (fips_addr) where enabled        -- an address may be active on at
-                                          -- most ONE account at a time; this
-                                          -- is what makes source-address →
-                                          -- account resolution deterministic
+  unique (fips_addr) where enabled and not pending
+                                          -- an address may be ACTIVE on at most
+                                          -- ONE account at a time; this is what
+                                          -- makes source-address → account
+                                          -- resolution deterministic. Accepting
+                                          -- an invitation parks the other active
+                                          -- row (usually the guest's own owner
+                                          -- row); buying a package on your own
+                                          -- account activates your owner row.
 ```
 
 If npub X is whitelisted by two accounts, only one entry may be enabled; the

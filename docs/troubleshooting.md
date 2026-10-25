@@ -205,10 +205,33 @@ A `401` from the webhook endpoint means the secret doesn't match.
 ## Whitelisting fails with "address already active on another account"
 
 **Cause:** an fips address may be **active on at most one account** (deterministic
-attribution). The guest npub is already an enabled entry elsewhere (often its own
-account).
-**Fix:** disable it on the other account first, or accept that its traffic is
-attributed where it's currently active.
+attribution). This only happens on the admin path (`POST /admin/whitelist`,
+which attaches immediately): the guest npub is already active elsewhere, often
+on its own account.
+**Fix:** use the portal flow instead (the owner invites, the guest accepts from
+their own dashboard, which moves the address), or disable it on the other
+account first.
+
+## Paid for a package but still not authorized
+
+Start with `GET /admin/accounts/<npub>`: it lists every whitelist row for the
+account with `authorized`/`authz_account`, competing rows on other accounts
+(`conflicts`), the entitlements, and open invitations.
+
+- `attached_to` is set: the user accepted someone else's invitation, so their
+  address is attributed to that account and their own packages sit unused.
+  Buying a package normally switches them back automatically; the dashboard
+  also offers "Use my own account instead". From the admin side,
+  `POST /admin/whitelist {"owner_npub":"<host>","guest_npub":"<npub>","enabled":false}`
+  then have the user press that button (or buy again).
+- The owner row shows a conflict that is `pending`: harmless, someone invited
+  them; pending rows never affect authorization.
+- `authorized: false` with an active entitlement and no conflicts: the agent
+  side (see "Authorized client still gets the captive 302").
+- The user signed in with a **nostr** key and is browsing from a fips node
+  whose address is not on the account: the dashboard shows "This device isn't
+  on your account" with instructions; inviting that device from itself is
+  accepted instantly.
 
 ## Backend won't start
 

@@ -18,6 +18,9 @@ var migrationsFS embed.FS
 // Store wraps a pgx connection pool.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// MaxGuests caps guest invitations per account (0 = DefaultMaxGuests).
+	MaxGuests int
 }
 
 // Open connects to Postgres and applies pending migrations.

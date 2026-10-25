@@ -34,6 +34,7 @@ type WhitelistView struct {
 	Label   string
 	Role    string
 	Enabled bool
+	Pending bool // invitation not yet accepted by the guest
 	Addr    netip.Addr
 }
 
@@ -45,6 +46,8 @@ type AccountSummary struct {
 	Open         []PurchaseView // pending/processing purchases awaiting payment
 	Services     []ServiceUsage // per-service consumption (shared balance, per-service rates)
 	UsageBytes   int64
+	Invites      []Invite // invitations addressed to this npub, awaiting its decision
+	AttachedTo   string   // owner npub of the account this npub's address is currently attributed to, if not its own
 }
 
 // ServiceUsage is an account's consumption on one egress service. Metered is the
@@ -93,7 +96,7 @@ func (s *Store) UsageByService(ctx context.Context, accountID string) ([]Service
 func (s *Store) NpubByAddr(ctx context.Context, addr netip.Addr) (string, error) {
 	var npub string
 	err := s.pool.QueryRow(ctx,
-		`SELECT npub FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled
+		`SELECT npub FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled AND NOT pending
 		 ORDER BY (role = 'owner') DESC LIMIT 1`, addr.String()).Scan(&npub)
 	if err != nil {
 		return "", ErrAccountNotFound
@@ -135,7 +138,7 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	}
 
 	wlRows, err := s.pool.Query(ctx,
-		`SELECT npub, COALESCE(label, ''), role, enabled, host(fips_addr)
+		`SELECT npub, COALESCE(label, ''), role, enabled, pending, host(fips_addr)
 		 FROM whitelist_entries WHERE account_id = $1 ORDER BY (role = 'owner') DESC, created_at`, acct.ID)
 	if err != nil {
 		return out, err
@@ -143,7 +146,7 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	for wlRows.Next() {
 		var w WhitelistView
 		var addr string
-		if err := wlRows.Scan(&w.Npub, &w.Label, &w.Role, &w.Enabled, &addr); err != nil {
+		if err := wlRows.Scan(&w.Npub, &w.Label, &w.Role, &w.Enabled, &w.Pending, &addr); err != nil {
 			wlRows.Close()
 			return out, err
 		}
@@ -172,5 +175,12 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 		return out, err
 	}
 	out.Services = svc
+
+	if out.Invites, err = s.PendingInvites(ctx, npub); err != nil {
+		return out, err
+	}
+	if out.AttachedTo, err = s.AttachedTo(ctx, acct.ID, acct.FipsAddr); err != nil {
+		return out, err
+	}
 	return out, nil
 }

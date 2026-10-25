@@ -66,9 +66,14 @@ Unauthenticated peers speak first bytes to it by design.
   signature verified against the claimed npub (NIP-07/NIP-55/NIP-46).
 - Sessions: 256-bit random IDs, HttpOnly/SameSite cookies, CSRF tokens on
   state-changing requests (whitelist edits, purchases).
-- Whitelist abuse: adding an npub requires no consent from that npub (it only
-  *grants* paid access), but the unique-active-address constraint prevents
-  hijacking an npub already active on another account.
+- Whitelist abuse: a guest entry is an **invitation** and does nothing until
+  the invited npub accepts it from its own dashboard (or the inviter is
+  demonstrably browsing from that very address). Before this, anyone could
+  attach any npub to their account; the one-active-row-per-address rule then
+  parked the victim's own owner row, so a package the victim paid for never
+  authorized them. Invitations require an active package, are capped per
+  account (`MAX_GUESTS_PER_ACCOUNT`) and rate-limited per inviter. Buying a
+  package on one's own account always re-activates one's own owner row.
 
 ## 6. Privacy & logging
 

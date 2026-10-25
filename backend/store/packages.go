@@ -165,6 +165,12 @@ func grantEntitlementTx(ctx context.Context, tx pgx.Tx, purchaseID, status strin
 		accountID, purchaseID, kind, vb, validityDays); err != nil {
 		return err
 	}
+	// Paying for your own package is an unambiguous choice of account: if this
+	// npub's address was attached to someone else's account (accepted guest),
+	// bring it home so the purchase actually authorizes the buyer.
+	if err := activateOwnerTx(ctx, tx, accountID); err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx,
 		`UPDATE purchases
 		 SET status = $2,

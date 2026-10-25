@@ -38,6 +38,7 @@ Read by `backend/` (see `backend/main.go`).
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
 | `USAGE_INTERVAL_S` | `30` | Usage-report interval advertised to agents (seconds). |
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |
+| `MAX_GUESTS_PER_ACCOUNT` | `5` | Maximum guest identities an account may invite (pending or accepted). The admin API is not capped. |
 | `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |
