@@ -93,6 +93,7 @@ Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/a
 
 ```sh
 gofmt -l . && go vet ./... && go test ./...
+sh deploy/test/run-nft-gate-test.sh   # nftables gate against a real kernel (needs Docker)
 ```
 
 Store integration tests run only when `TEST_DATABASE_URL` is set (use a

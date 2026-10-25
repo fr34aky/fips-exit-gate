@@ -77,6 +77,9 @@ gate/catalog entry, since it's still one port at one rate. See
 - **Immediately, everywhere:** cutting a node off is loading an empty set; the
   agent also fails **closed** if `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE=1` and the
   backend is unreachable past the grace window.
+- **Live connections** don't survive any of the above: the gate re-checks set
+  membership per packet and resets flows from a de-authorized source, and the
+  dispatcher closes idle tunnels after `DISPATCH_IDLE_TIMEOUT_S`.
 
 ## Rotate secrets
 

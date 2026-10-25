@@ -20,14 +20,27 @@ client is still blocked, the problem is **that client's entitlement** or the
 
 ---
 
-## Everything works, but the exit host itself isn't gated
+## Testing from the exit host itself hangs
 
-**Symptom:** testing the proxy *from the exit node itself* gives direct access
-(no captive redirect, no auth).
-**Cause:** the gate only fires on traffic **ingressing via the fips interface**
-(`iifname "fips0"`). Traffic from the exit host to its own fips address goes
-over loopback, so `iifname != fips0` and the gate returns early.
-**Fix:** always test from a **separate fips peer**, never the exit host.
+**Symptom:** `curl --socks5-hostname [EXIT_FIPS_ADDR]:1080 …` *on the exit node
+itself* never connects (no captive redirect, no error, just a timeout).
+**Cause:** service ports are reachable only via the fips interface. Traffic from
+the exit host to its own fips address goes over loopback, and the `svc_in`
+chain drops service-port traffic from any interface other than `fips0` so that
+nothing on the host (or routed to it) gets ungated proxy access.
+**Fix:** always test from a **separate fips peer**, never the exit host. To
+check the ruleset itself without a peer, run `deploy/test/run-nft-gate-test.sh`.
+
+## A revoked client is still connected
+
+It shouldn't be for more than one packet: removal from `authorized` resets the
+client's open service-port flows on their next packet in either direction
+(`svc_in`/`svc_out`), and the dispatcher closes silent tunnels after
+`DISPATCH_IDLE_TIMEOUT_S`. If a client keeps transferring after revocation,
+check that the address is really gone from the kernel set (`nft list set inet
+fips_exit authorized`) and that the loaded ruleset has the `svc_in` chain
+(`nft list chain inet fips_exit svc_in`; an old ruleset predating it only gates
+new connections — `sudo ./up.sh reload`).
 
 ## Authorized client still gets the captive 302 (or blocked)
 

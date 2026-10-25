@@ -65,11 +65,10 @@ services:
       DISPATCH_LISTEN: "[${EXIT_FIPS_ADDR:?set EXIT_FIPS_ADDR}]:${CONNECTIVITY_PORT:-1080}"
       DISPATCH_CLEARNET_UPSTREAM: "127.0.0.1:${CLEARNET_PORT:-1090}"
       DISPATCH_TOR_UPSTREAM: "127.0.0.1:${TOR_DISPATCH_PORT:-9052}"
-    volumes:
-      # Bind the config so edits don't require an image rebuild.
-      - ../exit/sockd.conf:/srv/sockd.conf:ro
-    cap_add:
-      - NET_ADMIN   # Dante binds a specific interface
+      # Tunnel bounds (defence in depth next to the per-packet nft gate): close a
+      # relayed connection after this long idle, or after this long in total.
+      DISPATCH_IDLE_TIMEOUT_S: ${DISPATCH_IDLE_TIMEOUT_S:-600}
+      DISPATCH_MAX_LIFETIME_S: ${DISPATCH_MAX_LIFETIME_S:-86400}
 
   # Phase 4b: second egress service — Tor. Same gate/captive/agent/billing, just
   # a new SOCKS endpoint on another port. Its SocksPort binds ONLY the fips

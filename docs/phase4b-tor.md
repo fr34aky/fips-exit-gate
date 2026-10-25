@@ -76,6 +76,11 @@ something authorized-only is actually listening there):
    for `FIPS_IF`/`EXIT_FIPS_ADDR`/etc.; if you've already `set -a; . ./.env` in
    your shell, use `sudo -E ./up.sh reload` to carry those through instead.
 
+`up.sh` refuses to render (`up`/`reload`) while the tor container is running
+and `TOR_PORT` is missing from `services.conf`, because that would leave an
+ungated, unmetered Tor SocksPort open to the whole mesh. Do step 3 before or
+together with step 2, or set `ALLOW_UNGATED_TOR=1` knowingly.
+
 To disable Tor, reverse all three: comment the `services.conf` line +
 `sudo ./up.sh reload`, `docker compose --profile tor down`, and disable the
 catalog row (`POST /admin/services {"key":"tor",...,"enabled":false}`).

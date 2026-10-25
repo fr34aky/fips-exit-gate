@@ -85,6 +85,25 @@ Volume (not rate) is already metered and enforced by the quota system: usage
 draws down the package balance and exhaustion revokes the address within a usage
 interval (see [maintenance](maintenance.md#revoke-or-suspend-access)).
 
+### Revocation cuts live connections
+
+The gate is enforced twice: a NAT rule decides once per connection whether a
+new flow reaches the service or the captive daemon, and filter rules
+(`svc_in`/`svc_out` in the rendered ruleset) re-check `authorized` membership on
+**every packet** and reset a flow whose source is no longer in the set. So when
+a package runs out or a guest is disabled, the client's open tunnels die on
+their next packet; they cannot keep using a connection opened while they were
+still authorized. The dispatcher also closes tunnels that stay silent for
+`DISPATCH_IDLE_TIMEOUT_S` (default 10 min) or outlive `DISPATCH_MAX_LIFETIME_S`
+(default 24 h), so a revoked but idle tunnel does not hold resources either.
+
+The same `svc_in` chain drops service-port traffic that did not arrive on the
+fips interface, which is why testing the proxy from the exit host itself hangs
+(see [Troubleshooting](troubleshooting.md)).
+
+`deploy/test/run-nft-gate-test.sh` exercises all of this against a real kernel
+in a throwaway container (redirect, accept, loopback drop, live reset, acct).
+
 ## Logging & privacy
 
 The design records **what** was used, not **where** it went.

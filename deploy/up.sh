@@ -24,6 +24,29 @@ fi
 export CAPTIVE_PORT
 NFT_FILE="${NFT_FILE:-/etc/nftables.d/fips-exit.nft}"
 
+# Refuse to leave a running Tor SocksPort ungated. Tor binds EXIT_FIPS_ADDR:TOR_PORT
+# for every fips address; only the rendered gate restricts it to paying clients.
+# If the tor container is running (or is about to be, via COMPOSE_PROFILES) its
+# port must be in services.conf, otherwise the whole mesh gets free, unmetered Tor.
+check_tor_gated() {
+    tor_port="${TOR_PORT:-1081}"
+    tor_up=0
+    case ",${COMPOSE_PROFILES:-}," in *,tor,*) tor_up=1 ;; esac
+    if [ "$tor_up" -eq 0 ] && command -v docker >/dev/null 2>&1 && \
+       [ -n "$(docker ps -q --filter label=com.docker.compose.project=fips-exit \
+                              --filter label=com.docker.compose.service=tor 2>/dev/null)" ]; then
+        tor_up=1
+    fi
+    [ "$tor_up" -eq 1 ] || return 0
+    if ! grep -Eq "^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]+${tor_port}([[:space:]]|\$)" "$here/services.conf"; then
+        echo "ERROR: Tor is running (or starting) on :$tor_port but services.conf does not list that port." >&2
+        echo "       Every fips address would get ungated, unmetered Tor. Either add 'tor $tor_port' to" >&2
+        echo "       services.conf (plus the /admin/services row) or stop it: docker compose --profile tor down." >&2
+        echo "       ALLOW_UNGATED_TOR=1 overrides this check." >&2
+        [ "${ALLOW_UNGATED_TOR:-0}" = "1" ] || exit 1
+    fi
+}
+
 render_nft() {
     mkdir -p "$(dirname "$NFT_FILE")"
     FIPS_IF="${FIPS_IF:?}" EXIT_FIPS_ADDR="${EXIT_FIPS_ADDR:?}" \
@@ -37,6 +60,7 @@ render_nft() {
 
 case "${1:-up}" in
     up)
+        check_tor_gated
         render_nft
         nft -f "$NFT_FILE"
         echo "nftables loaded from $NFT_FILE"
@@ -45,6 +69,7 @@ case "${1:-up}" in
         docker compose -f "$here/docker-compose.yaml" up -d --build
         ;;
     reload)
+        check_tor_gated
         render_nft
         # Replace only our table, leaving the rest of the host firewall intact.
         # This recreates the `authorized` set from allowlist.txt (empty in agent

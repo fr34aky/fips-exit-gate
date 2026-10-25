@@ -133,6 +133,8 @@ policy of its own and never logs destinations. Under compose these come from
 | `DISPATCH_DIAL_TIMEOUT_S` | `15` | Upstream dial timeout. |
 | `DISPATCH_HANDSHAKE_TIMEOUT_S` | `15` | SOCKS handshake deadline (cleared once the tunnel relays). |
 | `DISPATCH_MAX_CONNS` | `4096` | Max concurrent connections (load-shed beyond). |
+| `DISPATCH_IDLE_TIMEOUT_S` | `600` | Close a relayed tunnel after this long with no bytes either way (0 = never). |
+| `DISPATCH_MAX_LIFETIME_S` | `86400` | Close a relayed tunnel after this long in total, active or not (0 = never). |
 
 Onion routing needs the `tor` profile running (it provides `TOR_DISPATCH_PORT`);
 without it, clearnet still works and `.onion` returns a SOCKS host-unreachable.
