@@ -2,10 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -22,6 +19,7 @@ import (
 	"github.com/fr34aky/fips-exit-gate/backend/nostr"
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
+	"github.com/fr34aky/fips-exit-gate/pkg/captivetoken"
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
@@ -41,6 +39,10 @@ type portal struct {
 	publicURL       string                  // portal base URL for checkout/pay redirects
 	pacHost         string                  // exit <npub>.fips host for served PACs ("" = derive from publicURL)
 	tmpl            *template.Template
+
+	usedChallenges   *nostr.UsedChallenges // single-use login challenges
+	buyLimit         *rateLimiter          // POST /buy per source address / session
+	maxOpenPurchases int                   // pending invoices an account may hold at once
 }
 
 func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []byte, trustFips, secure bool) (*portal, error) {
@@ -52,6 +54,9 @@ func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []
 	return &portal{
 		store: st, sessionSecret: sessionSecret, challengeSecret: challengeSecret,
 		captiveSecret: captiveSecret, trustFipsSource: trustFips, secureCookies: secure, tmpl: tmpl,
+		usedChallenges:   nostr.NewUsedChallenges(),
+		buyLimit:         newRateLimiter(5, time.Minute),
+		maxOpenPurchases: 3,
 	}, nil
 }
 
@@ -302,12 +307,27 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	if err := nostr.VerifyChallenge(p.challengeSecret, nostr.ExtractChallenge(&ev), now); err != nil {
+	challenge := nostr.ExtractChallenge(&ev)
+	if err := nostr.VerifyChallenge(p.challengeSecret, challenge, now); err != nil {
 		p.authFail(w, jsonReq, "invalid or expired challenge")
 		return
 	}
 	if ev.CreatedAt < now-nostr.ChallengeTTLSeconds || ev.CreatedAt > now+60 {
 		p.authFail(w, jsonReq, "stale event")
+		return
+	}
+	// Audience binding: when the signer included a "u" tag (our login page
+	// always does), it must name THIS portal, so a signature obtained by a
+	// phishing page for its own challenge cannot be relayed here.
+	if u := nostr.ExtractTag(&ev, "u"); u != "" {
+		if parsed, err := url.Parse(u); err != nil || !strings.EqualFold(parsed.Host, r.Host) {
+			p.authFail(w, jsonReq, "event was signed for a different site")
+			return
+		}
+	}
+	// Single use: a captured event cannot be replayed within the TTL.
+	if !p.usedChallenges.Consume(challenge, now) {
+		p.authFail(w, jsonReq, "challenge already used")
 		return
 	}
 	if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
@@ -427,11 +447,8 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
-			log.Printf("portal: packages CreateAccount(%s): %v", npub, err)
-			http.Error(w, "could not create account", http.StatusInternalServerError)
-			return
-		}
+		// Open a session only; a GET must not create rows. The account is
+		// created when something is actually bought (or on the dashboard).
 		p.setSession(w, npub)
 	}
 	pkgs, err := p.store.ListPackages(r.Context())
@@ -444,6 +461,7 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 	// (captive webview / script) still authenticates /buy against its fips source.
 	p.render(w, "packages.html", map[string]any{
 		"Packages": pkgs, "Services": services, "Npub": npub, "Pending": r.URL.Query().Get("pending") != "",
+		"Err": r.URL.Query().Get("err"),
 	})
 }
 
@@ -606,6 +624,12 @@ func (p *portal) pacFor(key string) http.HandlerFunc {
 }
 
 func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
+	// Every buy creates a payment-provider invoice: bound it per caller so a
+	// script can't mint invoices at will.
+	if src, err := sourceAddr(r); err == nil && !p.buyLimit.allow(src.String()) {
+		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
+		return
+	}
 	npub, ok := p.session(r)
 	if !ok {
 		// Direct-buy: a cookie-less fips client (captive webview / script) posts
@@ -624,6 +648,16 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
+	// The session may have been opened without an account row (packages GET).
+	if _, err := p.store.CreateAccount(ctx, npub); err != nil {
+		log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
+		http.Error(w, "could not create account", http.StatusInternalServerError)
+		return
+	}
+	if open, err := p.store.OpenPurchases(ctx, npub); err == nil && len(open) >= p.maxOpenPurchases {
+		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
+		return
+	}
 	packageID := strings.TrimSpace(r.FormValue("package_id"))
 	id, err := p.store.CreatePurchase(ctx, npub, packageID)
 	if err != nil {
@@ -736,25 +770,7 @@ func (p *portal) render(w http.ResponseWriter, name string, data any) {
 // verifyCaptiveToken re-derives the captive daemon's token MAC (see
 // captive/token.go): outer = base64url("<addr>|<exp>|<mac>").
 func (p *portal) verifyCaptiveToken(token string) (netip.Addr, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 {
-		return netip.Addr{}, fmt.Errorf("malformed token")
-	}
-	h := hmac.New(sha256.New, p.captiveSecret)
-	h.Write([]byte(parts[0] + "|" + parts[1]))
-	want := base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:16])
-	if !hmac.Equal([]byte(parts[2]), []byte(want)) {
-		return netip.Addr{}, fmt.Errorf("bad token signature")
-	}
-	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || time.Now().Unix() > exp {
-		return netip.Addr{}, fmt.Errorf("expired token")
-	}
-	return netip.ParseAddr(parts[0])
+	return captivetoken.Verify(p.captiveSecret, token, time.Now().Unix())
 }
 
 func sourceAddr(r *http.Request) (netip.Addr, error) {

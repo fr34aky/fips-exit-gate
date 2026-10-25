@@ -36,7 +36,7 @@ func (s *Store) MetricsSnapshot(ctx context.Context) (Metrics, error) {
 		   AND (kind = 'time' OR volume_used < volume_bytes)`).Scan(&m.EntitlementsActive); err != nil {
 		return m, err
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(bytes), 0) FROM usage_samples`).Scan(&m.UsageBytesTotal); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT COALESCE(sum(bytes), 0) FROM usage_samples) + (SELECT COALESCE(sum(bytes), 0) FROM usage_daily)`).Scan(&m.UsageBytesTotal); err != nil {
 		return m, err
 	}
 	if err := scanCounts(ctx, s, `SELECT status, count(*) FROM accounts GROUP BY status`, m.AccountsByStatus); err != nil {

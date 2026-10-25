@@ -86,7 +86,8 @@ PORTAL_TRUST_FIPS_SOURCE=1   # transparent fips login (default on); 0 only behin
 PORTAL_SECURE_COOKIES=0      # 0 for the HTTP fips portal (default); 1 when served over HTTPS
 
 # --- Metrics (optional) ---
-METRICS_TOKEN=               # empty = /metrics open (restrict by network); set a token to require it
+METRICS_TOKEN=               # empty = /metrics open on the admin listener (loopback by default); set a token to require it
+LISTEN_ADMIN=127.0.0.1:8081   # /admin and /metrics; set :8081 on a management interface to reach them remotely
 
 # --- Payments: pick a rail — see "6. Payments" below (empty = admin-credit only) ---
 PAYMENT_RAIL=                # btcpay | phoenixd | empty
@@ -97,7 +98,7 @@ Bring it up:
 ```sh
 set -a; . ./backend.env; set +a
 docker compose -f backend-compose.yaml up -d --build     # Postgres + backend on :8080
-curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8080/admin/authz
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8081/admin/authz
 # -> {"addresses":[],"rev":0}
 ```
 
@@ -114,7 +115,7 @@ The agent authenticates with a one-time enroll token issued by the backend:
 
 ```sh
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
-     -XPOST http://localhost:8080/admin/enroll-token -d '{"note":"exit-01"}'
+     -XPOST http://127.0.0.1:8081/admin/enroll-token -d '{"note":"exit-01"}'
 # -> {"enroll_token":"..."}    keep this for step 3
 ```
 

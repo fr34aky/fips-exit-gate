@@ -91,3 +91,26 @@ func TestExtractChallenge(t *testing.T) {
 		t.Fatalf("expected empty challenge without a tag, got %q", got)
 	}
 }
+
+func TestUsedChallengesAreSingleUse(t *testing.T) {
+	u := NewUsedChallenges()
+	now := int64(1_700_000_000)
+	if !u.Consume("c1", now) {
+		t.Fatal("fresh challenge refused")
+	}
+	if u.Consume("c1", now+1) {
+		t.Fatal("replayed challenge accepted")
+	}
+	if !u.Consume("c2", now) {
+		t.Fatal("different challenge refused")
+	}
+	// After its own TTL the entry is irrelevant (the challenge itself has
+	// expired by then) and may be consumed again without harm.
+	if !u.Consume("c1", now+ChallengeTTLSeconds+1) {
+		t.Fatal("expired entry still blocking")
+	}
+	e := &Event{Tags: [][]string{{"challenge", "x"}, {"u", "https://portal.fips/auth/verify"}}}
+	if ExtractTag(e, "u") != "https://portal.fips/auth/verify" || ExtractTag(e, "method") != "" {
+		t.Fatal("ExtractTag")
+	}
+}

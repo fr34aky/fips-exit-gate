@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
 // backendClient talks to the fips-exit backend API (docs/api-agent-backend.md).
@@ -17,6 +22,37 @@ type backendClient struct {
 	httpc     *http.Client
 	authToken string // empty until enrolled
 	nodeID    string
+}
+
+// checkBackendURL enforces the transport rule for the agent<->backend
+// channel: https anywhere, or plain http only where the path is already
+// confidential and authenticated — loopback, a fips address (the mesh
+// encrypts end to end), or a .fips name. Anything else needs
+// FIPS_AGENT_ALLOW_INSECURE=1, because the bearer token would cross the
+// Internet in the clear.
+func checkBackendURL(raw string, allowInsecure bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" || strings.HasSuffix(host, ".fips") {
+			return nil
+		}
+		if ip, err := netip.ParseAddr(host); err == nil && (ip.IsLoopback() || fipsaddr.Valid(ip)) {
+			return nil
+		}
+		if allowInsecure {
+			return nil
+		}
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL %q is plain http to a non-fips, non-loopback host: the node token would cross the network unencrypted; use https:// or set FIPS_AGENT_ALLOW_INSECURE=1 knowingly", raw)
+	default:
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL %q: scheme must be https:// or http://", raw)
+	}
 }
 
 func newBackendClient(baseURL string) *backendClient {

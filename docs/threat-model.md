@@ -36,15 +36,17 @@ the mesh.
 Unauthenticated peers speak first bytes to it by design.
 
 - Memory-safe Go, no external deps; hard limits: max header bytes, 10 s idle
-  timeout, connection cap, per-source rate limit in nftables.
+  timeout, connection cap; optionally a per-source concurrent-connection
+  ceiling in nftables (`MAX_CONNS_PER_SRC`).
 - It never proxies: it only parses a SOCKS5 CONNECT + sniffs for HTTP, then
   answers a static 302 (with a signed, short-lived context token identifying
   the source address) or closes. No payload logging.
 
 ## 4. Payments
 
-- Webhook forgery: verify BTCPay HMAC **and** re-fetch invoice state via the
-  Greenfield API before crediting.
+- Webhook forgery: verify the BTCPay HMAC **and** re-read the invoice via the
+  Greenfield API before crediting (`InvoiceSettled` grants only if the API
+  also says `Settled`; a provider error makes BTCPay retry).
 - Double-credit: crediting transaction is idempotent on `btcpay_invoice_id`
   (unique constraint), webhook replays are no-ops.
 - Partial/late payments: only `settled` credits; late settlement after
@@ -62,10 +64,22 @@ Unauthenticated peers speak first bytes to it by design.
   integrity (§1). Disable it (`PORTAL_TRUST_FIPS_SOURCE=0`) only behind a
   reverse proxy that masks the source, where every client would otherwise
   appear as the proxy.
-- Nostr challenge login: server-generated nonce, single-use, short expiry;
-  signature verified against the claimed npub (NIP-07/NIP-55/NIP-46).
-- Sessions: 256-bit random IDs, HttpOnly/SameSite cookies, CSRF tokens on
-  state-changing requests (whitelist edits, purchases).
+- Nostr challenge login: server-generated HMAC nonce with a 120 s expiry,
+  **single-use** (an in-memory used-challenge cache refuses a replayed signed
+  event), signature verified against the claimed npub (NIP-07/NIP-55/NIP-46),
+  and audience-bound: when the event carries a `u` tag (the login page always
+  adds one) it must name this portal, so a signature obtained by a phishing
+  page cannot be relayed here.
+- Sessions: stateless HMAC-signed cookies (7-day), HttpOnly, SameSite=Lax.
+  State-changing requests are protected against cross-site requests by the
+  `Sec-Fetch-Site`/`Origin` checks of Go's `CrossOriginProtection` (every
+  browser since 2023 sends them) rather than per-form tokens; the Cashu
+  NUT-18 receiver is exempt by design (wallets POST cross-origin).
+- Purchases: `POST /buy` is rate-limited per source address (5/min) and an
+  account may hold at most 3 unpaid invoices at once; `GET /packages` never
+  creates rows.
+- Admin API and metrics live on a separate loopback listener
+  (`LISTEN_ADMIN`), never on the fips-facing port.
 - Whitelist abuse: adding an npub requires no consent from that npub (it only
   *grants* paid access), but the unique-active-address constraint prevents
   hijacking an npub already active on another account.
@@ -76,15 +90,21 @@ Unauthenticated peers speak first bytes to it by design.
   stores per-account byte totals per time window, never destinations or DNS
   names.
 - unbound: no query logging; cache only in memory.
-- Retention: usage samples aggregated after 90 days, raw reports dropped;
-  captive daemon logs counters only.
+- Retention: raw usage samples (one per client, service and 30 s window) are
+  rolled up into per-day, per-account totals after `RETENTION_DAYS` (90) and
+  deleted with their reports; the authz revision log is compacted after
+  `REVISION_RETENTION_DAYS` (30). Captive daemon logs counters only.
 - Data held per user: npub(s), derived addresses, package/payment references
   (BTCPay invoice IDs — no fiat identity), byte totals.
 
 ## 7. Agent ↔ backend channel
 
-- Bearer token stored hashed server-side; TLS required; tokens are per-node
-  so one compromised node can't affect others' sets.
+- Bearer token stored hashed server-side; the agent refuses plain `http://`
+  to anything but loopback, a fips address or a `.fips` name (the mesh
+  encrypts and authenticates end to end), so the token never crosses the
+  Internet unencrypted unless `FIPS_AGENT_ALLOW_INSECURE=1` is set
+  deliberately; tokens are per-node so one compromised node can't affect
+  others' sets.
 - A compromised exit node can: see the authorized set (npub-derived
   addresses of paying users) and fabricate usage (drain quotas). Mitigations:
   usage plausibility checks against node bandwidth, alerting on outliers;
@@ -95,5 +115,7 @@ Unauthenticated peers speak first bytes to it by design.
 - Backend outage: agents keep last-known set (bounded grace), captive path
   is fully local → paying users unaffected short-term, unknown users still
   get the portal redirect (portal availability permitting).
-- Captive/proxy floods: nftables per-source new-connection rate limits on
-  port 1080; Dante worker cap; monitoring alerts on connection-table growth.
+- Captive/proxy floods: optional per-source concurrent-connection ceiling
+  (`MAX_CONNS_PER_SRC`), dispatcher and captive connection caps, Dante worker
+  cap; monitoring alerts on connection-table growth. Portal: purchase rate
+  limit and open-invoice cap per account.

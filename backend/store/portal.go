@@ -63,12 +63,15 @@ type ServiceUsage struct {
 // show one balance draining at each service's rate.
 func (s *Store) UsageByService(ctx context.Context, accountID string) ([]ServiceUsage, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT sv.key, sv.name, sv.rate_ppm,
-		        COALESCE(sum(us.bytes), 0) AS metered,
-		        COALESCE(sum(us.bytes * sv.rate_ppm / 1000000), 0) AS billed
+		`WITH raw AS (
+		    SELECT service_id, sum(bytes) AS bytes FROM usage_samples WHERE account_id = $1 GROUP BY service_id
+		    UNION ALL
+		    SELECT service_id, sum(bytes) FROM usage_daily WHERE account_id = $1 GROUP BY service_id)
+		 SELECT sv.key, sv.name, sv.rate_ppm,
+		        COALESCE(sum(raw.bytes), 0) AS metered,
+		        COALESCE(sum(raw.bytes * sv.rate_ppm / 1000000), 0) AS billed
 		 FROM services sv
-		 LEFT JOIN usage_samples us
-		   ON us.service_id = sv.id AND us.account_id = $1
+		 LEFT JOIN raw ON raw.service_id = sv.id
 		 WHERE sv.enabled
 		 GROUP BY sv.key, sv.name, sv.rate_ppm
 		 ORDER BY sv.key`, accountID)
@@ -156,7 +159,8 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	}
 
 	if err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(sum(bytes), 0) FROM usage_samples WHERE account_id = $1`, acct.ID).
+		`SELECT (SELECT COALESCE(sum(bytes), 0) FROM usage_samples WHERE account_id = $1)
+		      + (SELECT COALESCE(sum(bytes), 0) FROM usage_daily WHERE account_id = $1)`, acct.ID).
 		Scan(&out.UsageBytes); err != nil {
 		return out, err
 	}

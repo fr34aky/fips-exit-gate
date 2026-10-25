@@ -90,6 +90,12 @@ func (h *handlers) writeAuthz(w http.ResponseWriter, ctx context.Context, client
 		return
 	}
 	add, del, rev, err := h.store.DeltaSince(ctx, clientRev)
+	if err == store.ErrCompacted {
+		// The log no longer reaches the agent's cursor: hand it the full set,
+		// which it reconciles against its kernel set (the documented fallback).
+		h.writeAuthz(w, ctx, 0)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return

@@ -9,6 +9,8 @@
 <p class="muted">Pick a bundle below. It's tied to your nostr identity and shared across any devices you
 whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 
+{{if eq .Err "limit"}}<div class="banner warn"><p style="margin:0">Too many purchases in a short time, or too many unpaid invoices open on this account. Pay or wait for one to expire, then try again.</p></div>
+{{else if .Err}}<div class="banner warn"><p style="margin:0">That purchase could not be started. Please try again.</p></div>{{end}}
 {{if .Pending}}<div class="banner warn"><strong>Purchase recorded — waiting for payment.</strong>
   <p class="muted" style="margin:.3rem 0 0">It activates automatically once paid. Track it under
   <a href="/dashboard">pending payments</a> on your dashboard.</p></div>{{end}}

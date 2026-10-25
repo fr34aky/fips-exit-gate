@@ -65,7 +65,7 @@ document.getElementById('nip07').addEventListener('click', async () => {
     const challenge = await challengePromise;
     const ev = await window.nostr.signEvent({
       kind: 27235, created_at: Math.floor(Date.now()/1000),
-      tags: [['challenge', challenge]], content: ''
+      tags: [['challenge', challenge], ['u', location.origin + '/auth/verify'], ['method', 'POST']], content: ''
     });
     const r = await fetch('/auth/verify', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event: ev})
