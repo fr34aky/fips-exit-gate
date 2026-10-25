@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"io"
 	"log"
 	"net"
@@ -27,6 +26,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
 	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 

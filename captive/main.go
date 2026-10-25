@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"log"
 	"net"
 	"net/netip"
@@ -17,6 +16,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
 	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 

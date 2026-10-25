@@ -26,7 +26,9 @@ func Setup(service string) {
 	case "debug":
 		level = slog.LevelDebug
 	default:
-		defer func() { log.Printf("logging: LOG_LEVEL=%q not supported (use debug|info); using info", os.Getenv("LOG_LEVEL")) }()
+		defer func() {
+			log.Printf("logging: LOG_LEVEL=%q not supported (use debug|info); using info", os.Getenv("LOG_LEVEL"))
+		}()
 	}
 	opts := &slog.HandlerOptions{Level: level}
 	var h slog.Handler

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"log"
 	"net/http"
 	"os"

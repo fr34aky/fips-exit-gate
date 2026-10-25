@@ -7,12 +7,12 @@ package main
 
 import (
 	"context"
-	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+
 	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
