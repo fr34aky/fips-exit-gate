@@ -57,8 +57,13 @@ func TestVerifyRejectsBadSig(t *testing.T) {
 	priv, _ := btcec.NewPrivateKey()
 	e := &Event{Kind: 1, CreatedAt: 1, Content: "x"}
 	signEvent(t, priv, e)
-	// Flip a byte in the signature.
-	e.Sig = e.Sig[:10] + "00" + e.Sig[12:]
+	// Corrupt a byte in the signature (pick a value that is guaranteed to differ
+	// from the original so the test can't pass vacuously).
+	repl := "00"
+	if e.Sig[10:12] == "00" {
+		repl = "ff"
+	}
+	e.Sig = e.Sig[:10] + repl + e.Sig[12:]
 	if _, err := Verify(e); err == nil {
 		t.Fatal("verify accepted bad signature")
 	}
@@ -89,5 +94,28 @@ func TestExtractChallenge(t *testing.T) {
 	e2 := &Event{Content: "xyz"}
 	if got := ExtractChallenge(e2); got != "" {
 		t.Fatalf("expected empty challenge without a tag, got %q", got)
+	}
+}
+
+func TestUsedChallengesAreSingleUse(t *testing.T) {
+	u := NewUsedChallenges()
+	now := int64(1_700_000_000)
+	if !u.Consume("c1", now) {
+		t.Fatal("fresh challenge refused")
+	}
+	if u.Consume("c1", now+1) {
+		t.Fatal("replayed challenge accepted")
+	}
+	if !u.Consume("c2", now) {
+		t.Fatal("different challenge refused")
+	}
+	// After its own TTL the entry is irrelevant (the challenge itself has
+	// expired by then) and may be consumed again without harm.
+	if !u.Consume("c1", now+ChallengeTTLSeconds+1) {
+		t.Fatal("expired entry still blocking")
+	}
+	e := &Event{Tags: [][]string{{"challenge", "x"}, {"u", "https://portal.fips/auth/verify"}}}
+	if ExtractTag(e, "u") != "https://portal.fips/auth/verify" || ExtractTag(e, "method") != "" {
+		t.Fatal("ExtractTag")
 	}
 }

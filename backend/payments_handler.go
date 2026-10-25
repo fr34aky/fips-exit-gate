@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -11,11 +12,18 @@ import (
 	"github.com/fr34aky/fips-exit-gate/pkg/metrics"
 )
 
+// invoiceChecker re-reads an invoice's status from the payment provider
+// (*payments.Client); nil in tests without a provider.
+type invoiceChecker interface {
+	InvoiceStatus(ctx context.Context, invoiceID string) (string, error)
+}
+
 // payHandler receives BTCPay webhooks and drives the purchase lifecycle.
 type payHandler struct {
 	store   *store.Store
 	secret  []byte              // BTCPay webhook secret (HMAC key)
 	metrics *metrics.CounterVec // fipsexit_webhook_events_total{type,result}; may be nil
+	checker invoiceChecker      // confirms Settled against the Greenfield API when set
 }
 
 func (ph *payHandler) record(typ, result string) {
@@ -54,6 +62,22 @@ func (ph *payHandler) webhook(w http.ResponseWriter, r *http.Request) {
 		err = ph.store.MarkProcessing(ctx, ev.InvoiceID)
 	case payments.EventInvoiceSettled:
 		// Payment final per the store's confirmation policy — unlock access.
+		// The HMAC proves the webhook came from BTCPay; re-reading the invoice
+		// proves the claim is current (and would catch a leaked webhook secret).
+		if ph.checker != nil {
+			status, cerr := ph.checker.InvoiceStatus(ctx, ev.InvoiceID)
+			if cerr != nil {
+				ph.record(ev.Type, "recheck_error")
+				writeErr(w, http.StatusBadGateway, "upstream", "could not confirm invoice with the payment provider")
+				return // BTCPay retries later
+			}
+			if status != "Settled" {
+				ph.record(ev.Type, "not_settled")
+				log.Printf("payments: webhook says settled but invoice %s is %q; not granting", ev.InvoiceID, status)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
 		err = ph.store.GrantByInvoice(ctx, ev.InvoiceID)
 	case payments.EventInvoiceInvalid:
 		err = ph.store.VoidByInvoice(ctx, ev.InvoiceID, "invalid")

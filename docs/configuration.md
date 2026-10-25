@@ -19,6 +19,13 @@ Copy each to the name without `.example`, `chmod 600`, and fill it in.
 
 ---
 
+## Logging (every binary)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOG_FORMAT` | `text` | `json` for one JSON record per line (`time`, `level`, `msg`, `service`). |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+
 ## Backend
 
 Read by `backend/` (see `backend/main.go`).
@@ -27,10 +34,11 @@ Read by `backend/` (see `backend/main.go`).
 |---|---|---|
 | `DATABASE_URL` | — (**required**) | Postgres DSN, e.g. `postgres://fips:pw@db:5432/fips_exit`. Under `backend-compose.yaml` this is **built for you** from `PGUSER`/`PGPASSWORD`/`PGDATABASE` (set those in `backend.env` instead — see below). |
 | `ADMIN_TOKEN` | — (**required**) | Bearer token protecting `/admin`. |
-| `LISTEN` | `:8080` | Listen address. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. For **transparent fips login** the backend must see the client's real source address — run it with **host networking**, not behind bridge NAT (see note below). |
+| `LISTEN` | `:8080` | Public listener: portal, agent API, payment webhooks. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. For **transparent fips login** the backend must see the client's real source address — run it with **host networking**, not behind bridge NAT (see note below). |
+| `LISTEN_ADMIN` | `127.0.0.1:8081` | Operator listener: `/admin/*` and `/metrics`, loopback by default so the static admin token is never reachable from the public port. Set e.g. `:8081` on a management interface to scrape metrics remotely; set it equal to `LISTEN` to run everything on one port (old behaviour). |
 | `SESSION_SECRET` | random | HMAC key for portal session cookies. Set it, or sessions drop on restart. |
 | `CHALLENGE_SECRET` | random | HMAC key for login challenges. Set it in production. |
-| `CAPTIVE_TOKEN_SECRET` | — | Verifies captive redirect tokens. **Must equal the exit node's value.** |
+| `CAPTIVE_TOKEN_SECRET` | — (**required**) | Verifies captive redirect tokens. **Must equal the exit node's value.** The backend refuses to start without it (an empty secret would make tokens forgeable). |
 | `PORTAL_PUBLIC_URL` | `http://localhost:8080` | Public base URL; BTCPay redirects buyers back here after paying. Over fips, prefer the portal's `<npub>.fips` URL (see [Addressing the portal](#addressing-the-portal-over-fips)). |
 | `PORTAL_PAC_HOST` | derived | Exit `<npub>.fips` host for the portal-served PACs. The portal serves one per profile — `GET /proxy-clear.pac` (Connectivity) and `GET /proxy-priv.pac` (Privacy), each using that service's catalog port; `/fips.pac` stays as a Connectivity alias. Empty = derive the host from `PORTAL_PUBLIC_URL`. The dashboard and FAQ link customers to them. |
 | `PORTAL_TRUST_FIPS_SOURCE` | **on** | Transparent fips-source login. On by default (the portal is reached natively over fips). Set `0` **only** when a reverse proxy masks the client source (e.g. a public HTTPS portal) — otherwise everyone would appear as the proxy. |
@@ -38,6 +46,12 @@ Read by `backend/` (see `backend/main.go`).
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
 | `USAGE_INTERVAL_S` | `30` | Usage-report interval advertised to agents (seconds). |
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |
+| `EXPIRY_SWEEP_S` | `60` | Timer-driven recompute of the authorized set, so entitlements that lapse while an account is idle are revoked promptly. `0` disables. |
+| `AUTHZ_ALLOW_MASS_REVOKE` | `0` | `1` marks full authz responses `force: true`, so agents apply a full reconcile even when it would revoke most of their live set. Use deliberately (e.g. after purging accounts), then unset. |
+| `MAX_GUESTS_PER_ACCOUNT` | `5` | Maximum guest identities an account may invite (pending or accepted). The admin API is not capped. |
+| `RETENTION_DAYS` | `90` | Raw per-window usage samples older than this are rolled up into per-day totals and deleted (dashboard totals unchanged). `0` disables. |
+| `REVISION_RETENTION_DAYS` | `30` | Authz revision-log rows older than this are compacted (the newest row is always kept; an agent with an older cursor receives a full set). `0` disables. |
+| `RETENTION_SWEEP_S` | `3600` | How often the two retention steps run. |
 | `WG_POOL4` | `10.64.0.0/16` | WireGuard inner IPv4 pool (peers get pool+idx; `.1` is the exit). Must equal every exit's `WG_POOL4`. `/24` or larger. |
 | `WG_POOL6` | `fc10:f1b5:ea17::/64` | Inner IPv6 pool (outside fips' fd00::/8). `/64` or larger. |
 | `WG_PORT` | `51820` | WireGuard UDP port on the exits (informational for agents). |
@@ -122,7 +136,13 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_STATE_DIR` | `/var/lib/fips-exit-agent` | Durable state (`identity.json` 0600, `runtime.json`). |
 | `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE` | `0` | `1` = revoke all access if the backend is unreachable past the grace window (default is fail-open: keep the last-known set). |
 | `FIPS_AGENT_USAGE_BUFFER_CAP` | `2880` | Max buffered usage reports during an outage (≈ 24 h at 30 s). |
+| `FIPS_AGENT_FULL_SYNC_S` | `300` | How often to force a full reconcile of the kernel set against the backend (drift backstop). `0` disables the periodic one (startup and heartbeat-triggered reconciles still run); positive values are floored at 30. |
+| `FIPS_AGENT_HEARTBEAT_S` | `60` | Heartbeat interval. |
+| `FIPS_AGENT_LONGPOLL_S` | `50` | How long the backend may hold an authz long-poll (5–55). |
+| `FIPS_AGENT_MASS_REVOKE_MIN` | `50` | Mass-revoke guard floor: a full reconcile is refused if it would delete more than this many addresses *and* more than half of the live set. |
+| `FIPS_AGENT_ALLOW_MASS_REVOKE` | `0` | `1` disables the mass-revoke guard on this node. |
 | `FIPS_AGENT_METRICS_ADDR` | — | If set (e.g. `:9101`), serve Prometheus `/metrics` here. Empty = disabled. |
+| `FIPS_AGENT_ALLOW_INSECURE` | `0` | The agent accepts `https://`, or plain `http://` only to loopback, a fips address or a `.fips` name (the mesh encrypts end to end). `1` allows plain http to any host (the node token then crosses the network unencrypted). |
 | `FIPS_AGENT_WG_IF` | — | WireGuard interface to manage peers on (e.g. `wg0`). Enables the peer sync and the heartbeat announcement. |
 | `FIPS_AGENT_WG_ENDPOINT` | — (**required with `FIPS_AGENT_WG_IF`**) | What clients dial: the exit's `<npub>.fips` name and `WG_PORT`, e.g. `npub1…exit….fips:51820`. |
 | `FIPS_AGENT_WG` | `wg` | Path to the `wg` binary. |

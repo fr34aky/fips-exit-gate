@@ -65,13 +65,15 @@ func (s *server) authzHandler(w http.ResponseWriter, r *http.Request) {
 	if wait <= 0 || wait > 55 {
 		wait = 25
 	}
+	full := r.URL.Query().Get("full") == "1"
 	deadline := time.Now().Add(time.Duration(wait) * time.Second)
 	// Long-poll: block until the revision moves past the client's, or timeout
 	// with 204 (unchanged). Always answer with the full current set otherwise.
+	// full=1 answers immediately (used by the agent's forced reconciles).
 	for {
 		s.mu.Lock()
 		cur := s.rev
-		if clientRev != cur {
+		if full || clientRev != cur {
 			addrs := make([]member, 0, len(s.authz))
 			for a, acct := range s.authz {
 				addrs = append(addrs, member{Addr: a, Account: acct})

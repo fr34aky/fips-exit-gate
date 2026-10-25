@@ -27,7 +27,7 @@ func makeLightning(t *testing.T, st *store.Store, npub string, pkgs []store.Pack
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AttachInvoice(ctx, pid, hash, "http://portal/pay/"+pid, "lnbc1..."); err != nil {
+	if err := st.AttachInvoice(ctx, pid, hash, "http://portal.test/pay/"+pid, "lnbc1..."); err != nil {
 		t.Fatal(err)
 	}
 	return pid
@@ -141,7 +141,7 @@ func TestBuyLightningRendersPayPage(t *testing.T) {
 
 	p := testPortal(t, st, false)
 	p.pay = payments.NewPhoenixd(fake.URL, "pw", fake.Client())
-	p.publicURL = "http://portal"
+	p.publicURL = "http://portal.test"
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
 	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
 	defer srv.Close()

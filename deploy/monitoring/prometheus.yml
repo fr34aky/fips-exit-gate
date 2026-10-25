@@ -12,7 +12,7 @@ scrape_configs:
   - job_name: fips-exit-backend
     metrics_path: /metrics
     static_configs:
-      - targets: ['backend:8080']
+      - targets: ['backend:8081']   # LISTEN_ADMIN: /metrics lives on the admin listener, not the public port
     # authorization:
     #   type: Bearer
     #   credentials: "<METRICS_TOKEN>"

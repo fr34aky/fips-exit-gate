@@ -30,6 +30,9 @@ type authzResponse struct {
 	Addresses []authzMember `json:"addresses,omitempty"`
 	Add       []authzMember `json:"add,omitempty"`
 	Del       []netip.Addr  `json:"del,omitempty"`
+	// Force (full responses only) tells the agent to apply the set even when
+	// doing so would revoke most of its live set; see Agent.applyAuthz.
+	Force bool `json:"force,omitempty"`
 }
 
 // usageSample is one client's metered total on one service in the window.
@@ -54,7 +57,12 @@ type usageAck struct {
 type heartbeatRequest struct {
 	Version  string `json:"version"`
 	AuthzRev int64  `json:"authz_rev"`
-	SetSize  int    `json:"set_size"`
+	// SetSize is the live kernel set size, or -1 when it could not be read.
+	SetSize int `json:"set_size"`
+	// SetHash is the authzhash fingerprint of the live kernel set (empty when
+	// it could not be read); the backend compares it member-by-member against
+	// authz_current at an equal revision to detect out-of-band drift.
+	SetHash string `json:"set_hash,omitempty"`
 	// WgPubkey/WgEndpoint announce this node's WireGuard service (empty when
 	// the node does not run one); the portal renders client configs from them.
 	WgPubkey   string `json:"wg_pubkey,omitempty"`

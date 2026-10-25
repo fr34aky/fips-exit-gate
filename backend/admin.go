@@ -215,6 +215,22 @@ func (h *handlers) adminCreateService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// adminInspect answers "why can't this user get out?" in one call: the
+// account, every whitelist row with its authz state and competing rows on
+// other accounts, entitlements, and unanswered invitations.
+func (h *handlers) adminInspect(w http.ResponseWriter, r *http.Request) {
+	insp, err := h.store.Inspect(r.Context(), r.PathValue("npub"))
+	if err == store.ErrAccountNotFound {
+		writeErr(w, http.StatusNotFound, "account_not_found", err.Error())
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, insp)
+}
+
 func (h *handlers) adminAuthz(w http.ResponseWriter, r *http.Request) {
 	members, rev, err := h.store.FullSet(r.Context())
 	if err != nil {
