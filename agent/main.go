@@ -13,9 +13,12 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 func main() {
+	logging.Setup("agent")
 	baseURL := os.Getenv("FIPS_AGENT_BACKEND_URL")
 	if baseURL == "" {
 		log.Fatal("agent: FIPS_AGENT_BACKEND_URL is required")

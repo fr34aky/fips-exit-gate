@@ -27,6 +27,9 @@ type agentMetrics struct {
 	usageBuffered   *metrics.Gauge
 	massRevokeRef   *metrics.Counter
 	fullSyncs       *metrics.Counter
+	usageCollected  *metrics.Gauge   // unix time of the last successful counter read
+	usageBytes      *metrics.Counter // bytes collected from the acct counters (all services)
+	collectErrors   *metrics.Counter
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -45,6 +48,9 @@ func newAgentMetrics() *agentMetrics {
 		usageBuffered:   r.Gauge("fipsexit_agent_usage_reports_buffered", "Usage reports currently buffered on disk"),
 		massRevokeRef:   r.Counter("fipsexit_agent_mass_revoke_refusals_total", "Full reconciles refused because they would revoke most of the live set"),
 		fullSyncs:       r.Counter("fipsexit_agent_full_syncs_total", "Full (rev=0) reconciles applied"),
+		usageCollected:  r.Gauge("fipsexit_agent_usage_last_collect_seconds", "Unix time of the last successful read of the acct counters"),
+		usageBytes:      r.Counter("fipsexit_agent_usage_bytes_total", "Bytes collected from the acct counters since start (all services)"),
+		collectErrors:   r.Counter("fipsexit_agent_usage_collect_errors_total", "Failed reads of the acct counters"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -91,6 +97,19 @@ func (m *agentMetrics) usageDrop(n int) {
 		return
 	}
 	m.usageDropped.Add(float64(n))
+}
+func (m *agentMetrics) collected(bytes uint64, now time.Time) {
+	if m == nil {
+		return
+	}
+	m.usageCollected.Set(float64(now.Unix()))
+	m.usageBytes.Add(float64(bytes))
+}
+func (m *agentMetrics) collectErr() {
+	if m == nil {
+		return
+	}
+	m.collectErrors.Inc()
 }
 func (m *agentMetrics) setBuffered(n int) {
 	if m == nil {

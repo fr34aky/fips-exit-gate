@@ -13,14 +13,17 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 func main() {
+	logging.Setup("backend")
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("backend: DATABASE_URL is required")
@@ -224,6 +227,27 @@ func csrfProtect(mux *http.ServeMux) http.Handler {
 
 func mountPublic(mux *http.ServeMux, h *handlers, p *portal, ph *payHandler, phx *phoenixdHandler) {
 	st := h.store
+	// Liveness / readiness (no auth, no body of interest): /healthz says the
+	// process serves requests; /readyz additionally checks the database and
+	// that every migration is applied. For load balancers and compose/systemd
+	// health checks.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	// /readyz is public and touches the database, so its verdict is cached
+	// for a few seconds: a flood of probes costs one query per window, not
+	// one pool connection per request.
+	ready := &readyCache{check: st.Ready}
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if err := ready.get(r.Context()); err != nil {
+			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready\n"))
+	})
+
 	// Agent API: enroll is unauthenticated (uses the enroll token in-body);
 	// the rest require the node's bearer auth token.
 	mux.HandleFunc("POST /v1/nodes/enroll", h.enroll)
@@ -261,6 +285,29 @@ func mountAdmin(mux *http.ServeMux, h *handlers, adminToken string, m *appMetric
 	mux.Handle("POST /admin/settle", requireAdmin(adminToken, h.adminSettle))
 	mux.Handle("GET /admin/services", requireAdmin(adminToken, h.adminListServices))
 	mux.Handle("POST /admin/services", requireAdmin(adminToken, h.adminCreateService))
+}
+
+// readyCache memoizes a readiness check for readyTTL.
+type readyCache struct {
+	check func(context.Context) error
+	mu    sync.Mutex
+	at    time.Time
+	err   error
+}
+
+const readyTTL = 5 * time.Second
+
+func (c *readyCache) get(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && time.Since(c.at) < readyTTL {
+		return c.err
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	c.err = c.check(cctx)
+	c.at = time.Now()
+	return c.err
 }
 
 // secretEnv returns the named secret, or a random ephemeral one (logged) if

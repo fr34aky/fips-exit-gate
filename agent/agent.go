@@ -450,6 +450,7 @@ func (a *Agent) runUsage(ctx context.Context) {
 	}
 	for ctx.Err() == nil {
 		if err := a.collectAndBuffer(); err != nil {
+			a.metrics.collectErr()
 			log.Printf("agent: collect usage: %v", err)
 		}
 		a.flushBuffer(ctx)
@@ -476,7 +477,8 @@ func (a *Agent) collectAndBuffer() error {
 	a.mu.Unlock()
 
 	epoch := counterEpoch()
-	return a.store.withRuntime(func(rt *runtime) {
+	var total uint64
+	err = a.store.withRuntime(func(rt *runtime) {
 		samples, next := computeDelta(rt.Baselines, cur, services)
 		rt.Baselines = next
 		rt.CounterEpoch = epoch
@@ -487,6 +489,10 @@ func (a *Agent) collectAndBuffer() error {
 			rt.PrimeBaselines = false
 			log.Printf("agent: primed usage baselines from %d counter(s) after state recovery; skipping this window", len(cur))
 			return
+		}
+		total = 0
+		for _, s := range samples {
+			total += s.Bytes
 		}
 		if len(samples) == 0 {
 			return
@@ -504,6 +510,12 @@ func (a *Agent) collectAndBuffer() error {
 			a.metrics.usageDrop(drop)
 		}
 	})
+	if err != nil {
+		return err
+	}
+	// Only a persisted collection counts as a success.
+	a.metrics.collected(total, a.now())
+	return nil
 }
 
 // flushBuffer delivers queued reports oldest-first, dropping each on ack and

@@ -16,6 +16,23 @@ OpenWrt-portable.
 Bind the agent/captive metrics addresses to a management interface, not the
 public one.
 
+## Health endpoints (backend)
+
+| Path | Meaning |
+|---|---|
+| `GET /healthz` | The process is up and serving (200 `ok`). For load balancers. |
+| `GET /readyz` | Additionally pings the database and checks every embedded migration is applied (200 `ready`, else 503 with the reason). Use it as the compose/systemd/orchestrator readiness probe and after upgrades. |
+
+Both are unauthenticated and served on the public listener.
+
+## Logging
+
+Every binary logs through `log/slog`. `LOG_FORMAT=json` switches from the
+default text lines to one JSON object per record (`time`, `level`, `msg`,
+`service`), `LOG_LEVEL` (`debug|info|warn|error`, default `info`) filters.
+Existing `log.Printf` lines appear as `INFO` records, so nothing is lost on the
+way to a structured pipeline.
+
 ## Metrics catalog
 
 **Backend** (`fipsexit_`)
@@ -49,6 +66,9 @@ public one.
 | `fipsexit_agent_usage_reports_dropped_total` | counter | Reports dropped (buffer full). |
 | `fipsexit_agent_full_syncs_total` | counter | Full (rev=0) reconciles applied. |
 | `fipsexit_agent_mass_revoke_refusals_total` | counter | Full reconciles refused by the mass-revoke guard (the backend's set would have revoked most of the live set). Alert on any increase. |
+| `fipsexit_agent_usage_last_collect_seconds` | gauge | Unix time of the last successful read of the `acct` counters. The stall alert watches this (idle customers are not a stall). |
+| `fipsexit_agent_usage_bytes_total` | counter | Bytes collected from the counters since start, all services. |
+| `fipsexit_agent_usage_collect_errors_total` | counter | Failed counter reads (table missing, `nft` failing). |
 
 **Captive** (`fipsexit_captive_`)
 

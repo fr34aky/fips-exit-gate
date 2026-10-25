@@ -51,8 +51,9 @@ package_types            -- the catalog (admin-managed)
   name          text                      -- "50 GB / 90 days", "1 month pass"
   volume_bytes  bigint null               -- volume kind
   validity_days int not null              -- volume: expiry window; time: pass length
-  price_eur_cents int not null            -- reference price; BTCPay converts
-                                          -- to BTC/LN/XMR at invoice time
+  price_msat    bigint not null           -- price in millisatoshi (shown as sats;
+                                          -- BTCPay/phoenixd invoice this amount)
+  available_until timestamptz null        -- promo window; hidden afterwards
   active        bool
 
 purchases                -- one per BTCPay invoice
@@ -88,7 +89,6 @@ services                 -- modular egress catalog (clearnet, tor, ...)
   rate_ppm      bigint not null           -- consumption rate, parts-per-million:
                                           -- 1_000_000 = 1.0x, 1_500_000 = 1.5x;
                                           -- balance -= bytes * rate_ppm / 1e6
-  backend       text                      -- "dante" | "tor-socks" | ... (informational)
   enabled       bool
 ```
 
@@ -147,14 +147,9 @@ authz_revisions          -- append-only log driving the agent delta sync
 
 ## Portal sessions
 
-```
-sessions
-  id            pk (random 256-bit)
-  npub          text not null             -- acting identity
-  account_id    fk null                   -- resolved account (owner or via whitelist)
-  method        fips|nip07|nip55|nip46|manual
-  created_at, expires_at
-```
+There is no sessions table. A session is a stateless HMAC-signed cookie
+(`backend/session.go`: npub + expiry, 7-day TTL, HttpOnly, SameSite=Lax);
+logout clears the cookie. Rotating `SESSION_SECRET` invalidates every session.
 
 ## Invariants worth enforcing in code
 

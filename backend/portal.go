@@ -55,7 +55,7 @@ func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []
 	return &portal{
 		store: st, sessionSecret: sessionSecret, challengeSecret: challengeSecret,
 		captiveSecret: captiveSecret, trustFipsSource: trustFips, secureCookies: secure, tmpl: tmpl,
-		inviteLimit: newRateLimiter(10, 10*time.Minute),
+		inviteLimit:      newRateLimiter(10, 10*time.Minute),
 		usedChallenges:   nostr.NewUsedChallenges(),
 		buyLimit:         newRateLimiter(5, time.Minute),
 		maxOpenPurchases: 3,
