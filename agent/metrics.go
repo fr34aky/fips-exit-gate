@@ -26,6 +26,7 @@ type agentMetrics struct {
 	usageDropped    *metrics.Counter
 	usageBuffered   *metrics.Gauge
 	wgPeers         *metrics.Gauge
+	wgErrors        *metrics.Counter
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -43,6 +44,7 @@ func newAgentMetrics() *agentMetrics {
 		usageDropped:    r.Counter("fipsexit_agent_usage_reports_dropped_total", "Usage reports dropped (buffer full)"),
 		usageBuffered:   r.Gauge("fipsexit_agent_usage_reports_buffered", "Usage reports currently buffered on disk"),
 		wgPeers:         r.Gauge("fipsexit_agent_wg_peers", "WireGuard peers configured on the node (0 when the service is off)"),
+		wgErrors:        r.Counter("fipsexit_agent_wg_errors_total", "WireGuard peer operations that failed (a rejected key or allowed-ip, or wg unavailable)"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -95,6 +97,12 @@ func (m *agentMetrics) setBuffered(n int) {
 		return
 	}
 	m.usageBuffered.Set(float64(n))
+}
+func (m *agentMetrics) wgErr(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.wgErrors.Add(float64(n))
 }
 func (m *agentMetrics) setWgPeers(n int) {
 	if m == nil {

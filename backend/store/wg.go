@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
@@ -37,7 +39,13 @@ var (
 	ErrWgPoolFull = errors.New("store: WireGuard address pool exhausted")
 	// ErrWgNotActive: the npub has no active whitelist row anywhere.
 	ErrWgNotActive = errors.New("store: that identity is not active on any account")
+	// ErrWgBadEndpoint: a node announced an endpoint that is not host:port.
+	ErrWgBadEndpoint = errors.New("store: invalid WireGuard endpoint")
 )
+
+// wgNodeFreshness: a node that has not announced its key for this long no
+// longer appears to customers (it stopped running WireGuard or is down).
+const wgNodeFreshness = "15 minutes"
 
 // DefaultMaxWgPeersPerAddr bounds peers per fips address (a gateway router
 // legitimately fronts several phones under one npub).
@@ -121,10 +129,31 @@ func (s *Store) maxWgPeers() int {
 	return DefaultMaxWgPeersPerAddr
 }
 
-// ValidWgKey reports whether k is a base64 32-byte key (WireGuard's format).
+// ValidWgKey reports whether k is exactly what `wg` accepts: 44 characters of
+// strict base64 (no whitespace, canonical padding bits) decoding to 32 bytes.
+// Go's lenient decoder would accept keys that wireguard-tools rejects, and a
+// single such row would make every node's batched `wg set` fail forever.
 func ValidWgKey(k string) bool {
-	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(k))
+	if len(k) != 44 || strings.ContainsAny(k, " \t\r\n") {
+		return false
+	}
+	b, err := base64.StdEncoding.Strict().DecodeString(k)
 	return err == nil && len(b) == 32
+}
+
+// validWgEndpoint accepts "host:port" / "[v6]:port" with a numeric port and no
+// control characters or spaces: the value is written into every customer's
+// INI config, so it must never be able to inject lines.
+func validWgEndpoint(e string) bool {
+	if e == "" || len(e) > 253 || strings.ContainsAny(e, " \t\r\n\x00") {
+		return false
+	}
+	host, port, err := net.SplitHostPort(e)
+	if err != nil || host == "" {
+		return false
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n > 0 && n < 65536
 }
 
 // CreateWgPeer issues a peer for forNpub. Allowed when forNpub is the session
@@ -142,6 +171,11 @@ func (s *Store) CreateWgPeer(ctx context.Context, sessionNpub, forNpub, label, p
 	}
 	var peer WgPeer
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		// Serialize issuance per address so the cap check below cannot be
+		// raced by a double-submitted form.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "wg:"+addr.String()); err != nil {
+			return err
+		}
 		// Permission: self, or a guest/owner entry on the session's account.
 		if forNpub != sessionNpub {
 			var ok bool
@@ -278,20 +312,36 @@ func (s *Store) WgPeerTable(ctx context.Context) ([]WgPeer, string, error) {
 
 // SetNodeWg records the WireGuard public key and endpoint a node announced.
 func (s *Store) SetNodeWg(ctx context.Context, nodeID, pubkey, endpoint string) error {
+	pubkey, endpoint = strings.TrimSpace(pubkey), strings.TrimSpace(endpoint)
 	if !ValidWgKey(pubkey) {
 		return ErrWgBadKey
 	}
+	if !validWgEndpoint(endpoint) {
+		return ErrWgBadEndpoint
+	}
 	_, err := s.pool.Exec(ctx,
 		`UPDATE exit_nodes SET wg_pubkey = $2, wg_endpoint = $3, wg_seen_at = now() WHERE id = $1`,
-		nodeID, strings.TrimSpace(pubkey), strings.TrimSpace(endpoint))
+		nodeID, pubkey, endpoint)
 	return err
 }
 
-// WgNodes lists exits that offer WireGuard (announced a key and an endpoint).
+// ClearNodeWg forgets a node's WireGuard announcement (it heartbeats without
+// one: the service was turned off there).
+func (s *Store) ClearNodeWg(ctx context.Context, nodeID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE exit_nodes SET wg_pubkey = NULL, wg_endpoint = NULL, wg_seen_at = NULL
+		 WHERE id = $1 AND wg_pubkey IS NOT NULL`, nodeID)
+	return err
+}
+
+// WgNodes lists exits that currently offer WireGuard: announced a key and an
+// endpoint, and did so recently (see wgNodeFreshness), so configs are never
+// rendered for a dead or decommissioned exit.
 func (s *Store) WgNodes(ctx context.Context) ([]WgNode, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id::text, name, wg_pubkey, wg_endpoint FROM exit_nodes
-		 WHERE wg_pubkey IS NOT NULL AND wg_endpoint IS NOT NULL AND wg_endpoint <> '' ORDER BY name`)
+		 WHERE wg_pubkey IS NOT NULL AND wg_endpoint IS NOT NULL AND wg_endpoint <> ''
+		   AND wg_seen_at > now() - interval '`+wgNodeFreshness+`' ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}

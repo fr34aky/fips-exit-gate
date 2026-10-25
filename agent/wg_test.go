@@ -155,3 +155,64 @@ func TestHeartbeatAnnouncesWireGuard(t *testing.T) {
 		t.Fatalf("heartbeat did not announce WireGuard: %+v", hb)
 	}
 }
+
+// pickyWg rejects one specific key, as `wg` would reject a malformed one, and
+// counts PublicKey calls.
+type pickyWg struct {
+	fakeWg
+	reject  string
+	pubReqs int
+}
+
+func (f *pickyWg) PublicKey() (string, error) {
+	f.mu.Lock()
+	f.pubReqs++
+	f.mu.Unlock()
+	return "NODEPUB=", nil
+}
+
+func (f *pickyWg) SetPeers(add []wgPeer, del []string) error {
+	for _, p := range add {
+		if p.Pubkey == f.reject {
+			return errors.New("wg: Key is not the correct length or format")
+		}
+	}
+	return f.fakeWg.SetPeers(add, del)
+}
+
+// One bad row must not block the other peers: the batch fails, the agent
+// falls back to per-peer operations, skips the bad one and advances the etag.
+func TestWgSyncSkipsPoisonedPeer(t *testing.T) {
+	be := &wgBackend{table: wgPeersResponse{Etag: "e1", Peers: []wgPeerInfo{
+		{Pubkey: "GOOD1", IP4: "10.64.0.5/32", IP6: "fc10::5/128"},
+		{Pubkey: "BAD!!", IP4: "10.64.0.6/32", IP6: "fc10::6/128"},
+		{Pubkey: "GOOD2", IP4: "10.64.0.7/32", IP6: "fc10::7/128"},
+	}}}
+	a := newTestAgent(t, be, newFakeFirewall())
+	wgi := &pickyWg{fakeWg: *newFakeWg(), reject: "BAD!!"}
+	a.wg = wgi
+	if err := a.applyWgPeers(be.table); err != nil {
+		t.Fatalf("apply with one poisoned row must succeed overall: %v", err)
+	}
+	if !wgi.has("GOOD1") || !wgi.has("GOOD2") || wgi.has("BAD!!") {
+		t.Fatalf("good peers not applied / bad one applied: %+v", wgi.peers)
+	}
+	if a.wgEtag != "e1" {
+		t.Fatal("etag not advanced after a partial apply")
+	}
+}
+
+// The interface key is read once and cached across heartbeats.
+func TestWgPublicKeyCached(t *testing.T) {
+	a := newTestAgent(t, &recordingBackend{}, newFakeFirewall())
+	wgi := &pickyWg{fakeWg: *newFakeWg()}
+	a.wg = wgi
+	for i := 0; i < 3; i++ {
+		if pub, err := a.wgPublicKey(); err != nil || pub != "NODEPUB=" {
+			t.Fatalf("pubkey: %q %v", pub, err)
+		}
+	}
+	if wgi.pubReqs != 1 {
+		t.Fatalf("PublicKey called %d times, want 1", wgi.pubReqs)
+	}
+}

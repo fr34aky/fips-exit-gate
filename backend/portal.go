@@ -483,7 +483,11 @@ func (p *portal) wgDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.store.DeleteWgPeer(r.Context(), npub, strings.TrimSpace(r.FormValue("id"))); err != nil {
-		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyWgErr(err)), http.StatusSeeOther)
+		msg := "Could not remove that WireGuard device."
+		if err == store.ErrWgPeerNotFound {
+			msg = friendlyWgErr(err)
+		}
+		http.Redirect(w, r, "/dashboard?err="+urlq(msg), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/dashboard?msg="+urlq("WireGuard device removed. The exit stops accepting its key within a minute."), http.StatusSeeOther)

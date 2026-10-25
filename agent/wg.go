@@ -41,8 +41,14 @@ type wgTool struct {
 
 func newWgTool(wgPath, iface string) *wgTool { return &wgTool{wgPath: wgPath, iface: iface} }
 
+// wgCmdTimeout bounds every `wg` invocation: a hung netlink call (interface
+// being torn down) must not stall the heartbeat or sync loops.
+const wgCmdTimeout = 10 * time.Second
+
 func (w *wgTool) run(args ...string) ([]byte, error) {
-	cmd := exec.Command(w.wgPath, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), wgCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, w.wgPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("wg %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -153,7 +159,7 @@ func (a *Agent) runWgSync(ctx context.Context) {
 	var lastFull time.Time
 	for ctx.Err() == nil {
 		etag := a.wgEtag
-		if a.now().Sub(lastFull) >= a.fullSyncEveryOrDefault() {
+		if a.fullSyncEvery > 0 && a.now().Sub(lastFull) >= a.fullSyncEvery {
 			etag = "" // force a full table + reconcile
 		}
 		resp, err := a.client.getWgPeers(ctx, etag)
@@ -166,7 +172,7 @@ func (a *Agent) runWgSync(ctx context.Context) {
 			continue
 		default:
 			if err := a.applyWgPeers(resp); err != nil {
-				a.metrics.nftErr()
+				a.metrics.wgErr(1)
 				log.Printf("agent: wg apply: %v", err)
 				sleep(ctx, backoff.next())
 				continue
@@ -182,13 +188,32 @@ func (a *Agent) runWgSync(ctx context.Context) {
 	}
 }
 
-func (a *Agent) fullSyncEveryOrDefault() time.Duration {
-	if a.fullSyncEvery > 0 {
-		return a.fullSyncEvery
+// wgPublicKey returns the interface's public key, read from the interface
+// once and cached (it never changes while the interface exists); re-read only
+// after an error, so a transient `wg` failure doesn't pin a stale value.
+func (a *Agent) wgPublicKey() (string, error) {
+	a.mu.Lock()
+	cached := a.wgPubkey
+	a.mu.Unlock()
+	if cached != "" {
+		return cached, nil
 	}
-	return 5 * time.Minute
+	pub, err := a.wg.PublicKey()
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.wgPubkey = pub
+	a.mu.Unlock()
+	return pub, nil
 }
 
+// applyWgPeers reconciles the interface with the backend's table. The adds
+// and removals go in one `wg set`; if that batch fails, each change is retried
+// on its own so a single bad row (a key or allowed-ip `wg` rejects) is logged
+// and skipped instead of blocking every other peer's add/remove on the node.
+// The etag advances either way: retrying the same poisoned row every 15 s
+// would not fix it, the log line and the error metric are the signal.
 func (a *Agent) applyWgPeers(resp wgPeersResponse) error {
 	current, err := a.wg.ListPeers()
 	if err != nil {
@@ -197,7 +222,24 @@ func (a *Agent) applyWgPeers(resp wgPeersResponse) error {
 	desired := desiredPeers(resp)
 	add, del := diffPeers(current, desired)
 	if err := a.wg.SetPeers(add, del); err != nil {
-		return err
+		failed := 0
+		for _, p := range add {
+			if e := a.wg.SetPeers([]wgPeer{p}, nil); e != nil {
+				failed++
+				log.Printf("agent: wg: skipping peer %s: %v", p.Pubkey, e)
+			}
+		}
+		for _, k := range del {
+			if e := a.wg.SetPeers(nil, []string{k}); e != nil {
+				failed++
+				log.Printf("agent: wg: could not remove peer %s: %v", k, e)
+			}
+		}
+		if failed == len(add)+len(del) {
+			return err // nothing applied at all: treat as a real failure and retry
+		}
+		a.metrics.wgErr(failed)
+		log.Printf("agent: wg peers synced with %d failure(s): batch error was: %v", failed, err)
 	}
 	if len(add)+len(del) > 0 {
 		log.Printf("agent: wg peers synced: +%d -%d (%d total)", len(add), len(del), len(desired))

@@ -41,6 +41,7 @@ type Agent struct {
 	wgEndpoint  string
 	wgSyncEvery time.Duration
 	wgEtag      string
+	wgPubkey    string // cached interface public key (guarded by mu)
 
 	// fullSyncEvery bounds how long the kernel set may silently drift from the
 	// backend before runSync forces a full reconcile even at an unchanged
@@ -408,7 +409,7 @@ func (a *Agent) runHeartbeat(ctx context.Context) {
 		snap := a.store.snapshotRuntime()
 		req := heartbeatRequest{Version: agentVersion, AuthzRev: snap.AuthzRev, SetSize: len(set)}
 		if a.wg != nil {
-			if pub, err := a.wg.PublicKey(); err == nil {
+			if pub, err := a.wgPublicKey(); err == nil {
 				req.WgPubkey, req.WgEndpoint = pub, a.wgEndpoint
 			} else {
 				log.Printf("agent: heartbeat: wg public key: %v", err)

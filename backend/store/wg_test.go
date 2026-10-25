@@ -150,3 +150,59 @@ func TestWgPoolsArithmetic(t *testing.T) {
 		t.Fatalf("slots = %d", p.slots())
 	}
 }
+
+func TestValidWgKeyIsStrict(t *testing.T) {
+	good := testKey(1)
+	if !ValidWgKey(good) {
+		t.Fatal("canonical key rejected")
+	}
+	for _, bad := range []string{
+		"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQR=", // non-canonical padding bits: wg rejects it
+		good + "\n", " " + good, good[:43], good + "=", "",
+	} {
+		if ValidWgKey(bad) {
+			t.Fatalf("lenient key accepted: %q", bad)
+		}
+	}
+	for _, ok := range []string{"[fd00::1]:51820", "npub1x.fips:51820", "203.0.113.1:1"} {
+		if !validWgEndpoint(ok) {
+			t.Fatalf("valid endpoint rejected: %q", ok)
+		}
+	}
+	for _, bad := range []string{"", "fd00::1", "x.fips", "x.fips:0", "x.fips:70000", "x.fips:51820\nAllowedIPs = ::/0", "x fips:51820"} {
+		if validWgEndpoint(bad) {
+			t.Fatalf("bad endpoint accepted: %q", bad)
+		}
+	}
+}
+
+func TestWgNodesAgeOutAndClear(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	tok, _ := st.CreateEnrollToken(ctx, "n")
+	nodeID, _, _ := st.EnrollNode(ctx, tok, "pk", "exit-01")
+	if err := st.SetNodeWg(ctx, nodeID, testKey(9), "x.fips:51820\nDNS = 1.2.3.4"); err != ErrWgBadEndpoint {
+		t.Fatalf("injected endpoint accepted: %v", err)
+	}
+	if err := st.SetNodeWg(ctx, nodeID, testKey(9), "[fd00::1]:51820"); err != nil {
+		t.Fatal(err)
+	}
+	if nodes, _ := st.WgNodes(ctx); len(nodes) != 1 {
+		t.Fatal("fresh node not listed")
+	}
+	if _, err := st.pool.Exec(ctx, `UPDATE exit_nodes SET wg_seen_at = now() - interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	if nodes, _ := st.WgNodes(ctx); len(nodes) != 0 {
+		t.Fatal("stale node still listed")
+	}
+	if err := st.SetNodeWg(ctx, nodeID, testKey(9), "[fd00::1]:51820"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClearNodeWg(ctx, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if nodes, _ := st.WgNodes(ctx); len(nodes) != 0 {
+		t.Fatal("cleared node still listed")
+	}
+}

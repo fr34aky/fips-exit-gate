@@ -48,6 +48,7 @@ public one.
 | `fipsexit_agent_usage_reports_buffered` | gauge | Reports currently buffered on disk. |
 | `fipsexit_agent_usage_reports_dropped_total` | counter | Reports dropped (buffer full). |
 | `fipsexit_agent_wg_peers` | gauge | WireGuard peers configured on the node (0 when the service is off). |
+| `fipsexit_agent_wg_errors_total` | counter | WireGuard peer operations that failed (rejected key/allowed-ip, or `wg` unavailable). |
 
 **Captive** (`fipsexit_captive_`)
 

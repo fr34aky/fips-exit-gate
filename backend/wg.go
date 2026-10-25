@@ -38,19 +38,31 @@ func genWgKeypair() (priv, pub string, err error) {
 // the tunnel's own endpoint) stays native on every platform.
 const wgAllowedIPs = "0.0.0.0/0, ::/1, 8000::/2, c000::/3, e000::/4, f000::/5, f800::/6, fc00::/8, fe00::/7"
 
-// renderWgConfig produces one client configuration for peer on node.
+// iniSafe strips anything that could start a new INI line or key from a value
+// that is interpolated into a config (node names, labels, URLs).
+func iniSafe(v string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, v)
+}
+
+// renderWgConfig produces one client configuration for peer on node. The
+// endpoint was validated as host:port when the node announced it.
 func renderWgConfig(priv string, peer store.WgPeer, node store.WgNode, s wgSettings, portalURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Interface]\n")
-	fmt.Fprintf(&b, "# fips-exit WireGuard, issued to %s (%s). One config per device.\n", peer.Npub, peer.FipsAddr)
-	fmt.Fprintf(&b, "# Portal: %s/dashboard  (reachable over fips while the tunnel is up: fd00::/8 is excluded below)\n", portalURL)
+	fmt.Fprintf(&b, "# fips-exit WireGuard, issued to %s (%s). One config per device.\n", iniSafe(peer.Npub), peer.FipsAddr)
+	fmt.Fprintf(&b, "# Portal: %s/dashboard  (reachable over fips while the tunnel is up: fd00::/8 is excluded below)\n", iniSafe(portalURL))
 	fmt.Fprintf(&b, "PrivateKey = %s\n", priv)
 	fmt.Fprintf(&b, "Address = %s/32, %s/128\n", peer.IP4, peer.IP6)
 	fmt.Fprintf(&b, "DNS = %s, %s\n", s.dns4, s.dns6)
 	fmt.Fprintf(&b, "MTU = %d\n\n", s.mtu)
-	fmt.Fprintf(&b, "[Peer]\n# %s\n", node.Name)
+	fmt.Fprintf(&b, "[Peer]\n# %s\n", iniSafe(node.Name))
 	fmt.Fprintf(&b, "PublicKey = %s\n", node.Pubkey)
-	fmt.Fprintf(&b, "Endpoint = %s\n", node.Endpoint)
+	fmt.Fprintf(&b, "Endpoint = %s\n", iniSafe(node.Endpoint))
 	fmt.Fprintf(&b, "AllowedIPs = %s\n", wgAllowedIPs)
 	fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
 	return b.String()

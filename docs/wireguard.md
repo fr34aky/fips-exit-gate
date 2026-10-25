@@ -55,8 +55,9 @@ is refused from fips (it is one of the guarded ports), never open-but-unmetered.
 
    Then in `deploy/.env` set `WG_IF=wg0` (and the `WG_*` plan if you changed
    it), uncomment `wg 51820 udp` in `services.conf`, set
-   `FIPS_AGENT_WG_IF=wg0` and `FIPS_AGENT_WG_ENDPOINT=npub1…exit….fips:51820`,
-   then `sudo ./up.sh reload` and restart the agent. `up.sh` checks the
+   `FIPS_AGENT_WG_IF=wg0` and `FIPS_AGENT_WG_ENDPOINT=[<EXIT_FIPS_ADDR>]:51820`
+   (an address literal: see "Names inside the tunnel" below), then
+   `sudo ./up.sh reload` and restart the agent. `up.sh` checks the
    forwarding sysctls, that `wg0` exists, and inserts the `DOCKER-USER`
    accepts Docker's `FORWARD DROP` policy would otherwise apply to the tunnel.
 
@@ -110,10 +111,26 @@ one `[Peer]` per exit that offers WireGuard. The private key is generated
 server-side and never stored; lose it and you create a new device.
 
 The config's `AllowedIPs` is `::/0` minus `fd00::/8` (spelled out as
-prefixes) plus `0.0.0.0/0`, so the mesh stays native on every platform, and
-`Endpoint` is the exit's `<npub>.fips` name so gateway LAN clients can reach
-it. `DNS` points at the resolver inside the tunnel (unbound on the gateway
+prefixes) plus `0.0.0.0/0`, so the mesh stays native on every platform.
+`DNS` points at the resolver inside the tunnel (unbound on the gateway
 addresses), so names resolve at the exit's location.
+
+### Names inside the tunnel
+
+While the tunnel is up the device's resolver is the tunnel DNS, and unbound
+knows nothing about `.fips` (those names resolve by derivation on fips nodes).
+Two consequences, both handled by defaults:
+
+- The `Endpoint` the agent announces should be the exit's **fips address
+  literal** (`[fd…]:51820`), so reconnects after a network change never
+  depend on DNS. Use the `<npub>.fips` name only for clients behind a fips
+  gateway, which can reach the mesh by name only — and then wire `.fips` into
+  unbound (next point).
+- `.fips` names (the portal) do not resolve from a phone while the tunnel is
+  up unless unbound forwards the `fips.` zone to the host's fips resolver;
+  `deploy/unbound.conf` carries a commented `forward-zone` for that. Linux
+  clients with systemd-resolved keep `~fips` routed to `fips0`'s resolver if
+  fips installed one. The portal is always reachable by its fips address.
 
 An unauthorized or exhausted customer's handshake is dropped: the app shows
 no recent handshake and the Internet is black-holed while the tunnel is up.
@@ -130,6 +147,12 @@ redirect for WireGuard; the SOCKS captive path remains for discovery.
 - Address plan: the backend's `WG_POOL4/6` must equal every exit's `.env`
   and `wg0.conf`; the agent logs the backend's plan on heartbeat so a
   mismatch is visible.
-- Metrics: `fipsexit_agent_wg_peers`. Revocation: the gate drops the next
-  outer packet, so a revoked tunnel dies within one keepalive (25 s).
+- Metrics: `fipsexit_agent_wg_peers`, `fipsexit_agent_wg_errors_total` (a
+  peer row `wg` rejects is logged, skipped and counted; the other peers still
+  sync). Revocation: the gate drops the next outer packet, so a revoked
+  tunnel dies within one keepalive (25 s).
+- A node that stops announcing a key (service turned off) is dropped from
+  the customer-facing list on its next heartbeat, and any node silent for
+  15 minutes disappears from it, so configs are never rendered for a dead
+  exit.
 - Removing a device on the dashboard removes the peer within one sync.

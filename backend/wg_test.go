@@ -151,6 +151,14 @@ func TestWgPortalAndAgentFlow(t *testing.T) {
 		t.Fatalf("table after create: %d %+v", resp.StatusCode, tbl2)
 	}
 
+	// A heartbeat without a key means the node stopped offering WireGuard:
+	// it disappears from the customer-facing list.
+	resp = nodeReq("POST", "/v1/nodes/"+nodeID+"/heartbeat", `{"version":"t","authz_rev":0,"set_size":0}`)
+	resp.Body.Close()
+	if nodes, _ := st.WgNodes(ctx); len(nodes) != 0 {
+		t.Fatalf("node still offered after heartbeat without wg key: %+v", nodes)
+	}
+
 	// Unauthenticated creation is refused.
 	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, _ = noRedirect.Post(srv.URL+"/wg/new", "application/x-www-form-urlencoded", strings.NewReader("device_npub="+npub))

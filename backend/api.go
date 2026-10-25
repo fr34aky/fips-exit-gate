@@ -177,6 +177,8 @@ func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 		if err := h.store.SetNodeWg(r.Context(), nodeID, req.WgPubkey, req.WgEndpoint); err != nil {
 			log.Printf("backend: node %s wg announce rejected: %v", nodeID, err)
 		}
+	} else if err := h.store.ClearNodeWg(r.Context(), nodeID); err != nil {
+		log.Printf("backend: node %s wg clear: %v", nodeID, err)
 	}
 	svc := make([]map[string]any, 0, len(services))
 	for _, s := range services {
