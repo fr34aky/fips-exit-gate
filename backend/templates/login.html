@@ -38,11 +38,13 @@
 
 <div class="card">
   <h2 style="margin-top:0">Mobile signer (Amber) or paste</h2>
-  <p class="muted">On Android with <strong>Amber</strong>, or any nostr signer: sign an event whose
-  <span class="mono">challenge</span> tag is <span class="mono" id="chal">…</span> and paste the signed
+  <p class="muted">On Android with <strong>Amber</strong>, or any nostr signer: sign a kind
+  <span class="mono">27235</span> event with a <span class="mono">challenge</span> tag of
+  <span class="mono" id="chal">…</span> and a <span class="mono">u</span> tag of
+  <span class="mono">{{.VerifyURL}}</span> (this binds the signature to this portal), then paste the signed
   event JSON below.</p>
   <form method="post" action="/auth/verify" id="manual">
-    <textarea name="event" placeholder='{"kind":27235,"created_at":...,"tags":[["challenge","..."]],"content":"","pubkey":"...","id":"...","sig":"..."}'></textarea>
+    <textarea name="event" placeholder='{"kind":27235,"created_at":...,"tags":[["challenge","..."],["u","{{.VerifyURL}}"],["method","POST"]],"content":"","pubkey":"...","id":"...","sig":"..."}'></textarea>
     <p><input type="submit" value="Sign in"></p>
   </form>
 </div>

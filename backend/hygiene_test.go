@@ -81,8 +81,31 @@ func TestLoginRejectsEventSignedForAnotherSite(t *testing.T) {
 	if code := post("https://evil.example/auth/verify"); code != http.StatusUnauthorized {
 		t.Fatalf("event for another site accepted: %d", code)
 	}
+	// Omitting the tag is not a way around the check.
+	ev := signAuthEventWithTags(t, priv, [][]string{{"challenge", ch.Challenge}})
+	body, _ := json.Marshal(map[string]any{"event": ev})
+	req := httptest.NewRequest("POST", "http://portal.fips:8080/auth/verify", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	p.authVerify(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("event without a u tag accepted: %d", rec.Code)
+	}
+	// The browser's host (r.Host) is accepted, as is the configured public host.
 	if code := post("http://portal.fips:8080/auth/verify"); code != http.StatusOK {
-		t.Fatalf("event for this site refused: %d", code)
+		t.Fatalf("event for this site (request host) refused: %d", code)
+	}
+}
+
+func TestAudienceAcceptsConfiguredPublicHostBehindProxy(t *testing.T) {
+	st := testStoreMain(t)
+	p := testPortal(t, st, false)                                                // publicURL = http://portal.test
+	req := httptest.NewRequest("POST", "http://127.0.0.1:8080/auth/verify", nil) // Host rewritten by a proxy
+	if !p.audienceOK("https://portal.test/auth/verify", req) {
+		t.Fatal("configured public host refused")
+	}
+	if p.audienceOK("https://other.test/auth/verify", req) || p.audienceOK("", req) || p.audienceOK("nonsense", req) {
+		t.Fatal("foreign/empty audience accepted")
 	}
 }
 

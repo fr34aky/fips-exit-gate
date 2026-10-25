@@ -61,7 +61,9 @@ throughout — the gate only touches traffic to `EXIT_FIPS_ADDR` on service port
 ## Phase 2: dynamic authorization (exit-agent)
 
 Instead of the static `allowlist.txt`, run the exit-agent (`--profile agent` in
-compose, or the systemd unit in `systemd/`). It owns the `authorized` set from
+compose, or the systemd unit in `systemd/`, which runs as the unprivileged
+`fips-exit-agent` user — install `systemd/fips-exit-agent.sysusers.conf` and run
+`systemd-sysusers` first, see the unit's header). It owns the `authorized` set from
 the backend and reports per-service usage read from the `acct` counters. Run
 one or the other, not both. See `../agent/README.md` for M2 verification against
 the bundled `cmd/fake-backend`.

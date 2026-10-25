@@ -253,7 +253,7 @@ func (p *portal) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	data := map[string]any{}
+	data := map[string]any{"VerifyURL": p.verifyURL(r)}
 	if npub, ok := p.transparentNpub(r); ok {
 		data["FipsHint"] = npub // known address — one-click continue
 	} else if p.fipsSource(r) {
@@ -316,14 +316,13 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		p.authFail(w, jsonReq, "stale event")
 		return
 	}
-	// Audience binding: when the signer included a "u" tag (our login page
-	// always does), it must name THIS portal, so a signature obtained by a
-	// phishing page for its own challenge cannot be relayed here.
-	if u := nostr.ExtractTag(&ev, "u"); u != "" {
-		if parsed, err := url.Parse(u); err != nil || !strings.EqualFold(parsed.Host, r.Host) {
-			p.authFail(w, jsonReq, "event was signed for a different site")
-			return
-		}
+	// Audience binding: the event MUST carry a "u" tag naming this portal (the
+	// login page and the paste instructions always include it), so a signature
+	// a phishing page obtained for its own challenge cannot be relayed here.
+	// Optional checking would be no checking: the relay would just omit it.
+	if !p.audienceOK(nostr.ExtractTag(&ev, "u"), r) {
+		p.authFail(w, jsonReq, "event must carry a \"u\" tag naming this portal ("+p.verifyURL(r)+")")
+		return
 	}
 	// Single use: a captured event cannot be replayed within the TTL.
 	if !p.usedChallenges.Consume(challenge, now) {
@@ -340,6 +339,33 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// audienceOK reports whether a "u" tag names this portal: its host must equal
+// the host the browser used (r.Host) or the configured public host, so a
+// Host-rewriting reverse proxy does not lock everyone out.
+func (p *portal) audienceOK(u string, r *http.Request) bool {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	if strings.EqualFold(parsed.Host, r.Host) {
+		return true
+	}
+	if pu, err := url.Parse(p.publicURL); err == nil && pu.Host != "" && strings.EqualFold(parsed.Host, pu.Host) {
+		return true
+	}
+	return false
+}
+
+// verifyURL is the "u" value a signer should use for this request, shown on
+// the login page for the manual/mobile paste flow.
+func (p *portal) verifyURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + "/auth/verify"
 }
 
 func (p *portal) authFail(w http.ResponseWriter, jsonReq bool, msg string) {
@@ -360,7 +386,7 @@ func (p *portal) authFips(w http.ResponseWriter, r *http.Request) {
 		// the entry form with a pointed message rather than a silent bounce.
 		if claim := strings.TrimSpace(r.FormValue("npub")); claim != "" && p.fipsSource(r) {
 			p.render(w, "login.html", map[string]any{
-				"FipsSource": true,
+				"FipsSource": true, "VerifyURL": p.verifyURL(r),
 				"Error": "That npub doesn't match your fips source address. Enter your fips npub — " +
 					"your fips node identity (from `fipsctl show identity-cache`), not a nostr login npub.",
 			})
@@ -624,12 +650,6 @@ func (p *portal) pacFor(key string) http.HandlerFunc {
 }
 
 func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
-	// Every buy creates a payment-provider invoice: bound it per caller so a
-	// script can't mint invoices at will.
-	if src, err := sourceAddr(r); err == nil && !p.buyLimit.allow(src.String()) {
-		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
-		return
-	}
 	npub, ok := p.session(r)
 	if !ok {
 		// Direct-buy: a cookie-less fips client (captive webview / script) posts
@@ -641,11 +661,13 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
-			log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
-			http.Error(w, "could not create account", http.StatusInternalServerError)
-			return
-		}
+	}
+	// Every buy creates a payment-provider invoice: bound it per identity so a
+	// script can't mint invoices at will. Keyed on the npub, not the source
+	// address, so buyers behind one reverse proxy don't share a bucket.
+	if !p.buyLimit.allow(npub) {
+		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
+		return
 	}
 	ctx := r.Context()
 	// The session may have been opened without an account row (packages GET).

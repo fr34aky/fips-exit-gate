@@ -76,7 +76,7 @@ func signAuthEvent(t *testing.T, priv *btcec.PrivateKey, challenge string) nostr
 	t.Helper()
 	e := nostr.Event{
 		Kind: 27235, CreatedAt: time.Now().Unix(),
-		Tags: [][]string{{"challenge", challenge}}, Content: "",
+		Tags: [][]string{{"challenge", challenge}, {"u", testVerifyURL}, {"method", "POST"}}, Content: "",
 	}
 	e.Pubkey = hex.EncodeToString(priv.PubKey().SerializeCompressed()[1:33])
 	id, _ := nostr.ComputeID(&e)
@@ -92,8 +92,16 @@ func testPortal(t *testing.T, st *store.Store, trustFips bool) *portal {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Login events are audience-bound: tests sign for this host (the test
+	// servers listen on 127.0.0.1:<random>, so the configured public host is
+	// the one that matches).
+	p.publicURL = "http://portal.test"
 	return p
 }
+
+// testVerifyURL is the "u" tag value signAuthEvent uses; audienceOK accepts
+// it because testPortal sets the matching public URL.
+const testVerifyURL = "http://portal.test/auth/verify"
 
 func TestPortalLoginAndWhitelist(t *testing.T) {
 	st := testStoreMain(t)

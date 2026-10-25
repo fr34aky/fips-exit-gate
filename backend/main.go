@@ -97,7 +97,12 @@ func main() {
 				// would be forgeable — refuse to start rather than run insecurely.
 				log.Fatal("backend: BTCPAY_WEBHOOK_SECRET is required with PAYMENT_RAIL=btcpay")
 			}
-			ph = &payHandler{store: st, secret: []byte(whSecret), metrics: m.webhook, checker: provider.(*payments.Client)}
+			ph = &payHandler{store: st, secret: []byte(whSecret), metrics: m.webhook}
+			if c, ok := provider.(invoiceChecker); ok {
+				ph.checker = c
+			} else {
+				log.Printf("backend: BTCPay provider cannot re-check invoices; settlement webhooks are trusted on their HMAC alone")
+			}
 			log.Printf("backend: BTCPay payments enabled")
 		case "phoenixd":
 			whSecret := os.Getenv("PHOENIXD_WEBHOOK_SECRET")

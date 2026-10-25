@@ -26,6 +26,14 @@ func TestAggregateUsageRollsUpAndKeepsTotals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// An old sample for a service key not in the catalog (service_id NULL):
+	// unbillable; must be dropped by the roll-up, never wedge it.
+	if _, err := st.IngestUsage(ctx, nodeID, ReportInput{
+		ReportID: "oldunknown", WindowEnd: old,
+		Samples: []SampleInput{{Service: "unknown:9999", Addr: addrA, Bytes: 77}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.IngestUsage(ctx, nodeID, ReportInput{
 		ReportID: "fresh", WindowEnd: time.Now(),
 		Samples: []SampleInput{{Service: "clearnet", Addr: addrA, Bytes: 500}},
@@ -33,16 +41,16 @@ func TestAggregateUsageRollsUpAndKeepsTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := st.Summary(ctx, npubA)
-	if before.UsageBytes != 3500 {
-		t.Fatalf("usage before = %d, want 3500", before.UsageBytes)
+	if before.UsageBytes != 3577 {
+		t.Fatalf("usage before = %d, want 3577", before.UsageBytes)
 	}
 
 	n, reports, err := st.AggregateUsage(ctx, time.Now().Add(-90*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 || reports != 2 {
-		t.Fatalf("aggregated %d samples / %d reports, want 2 / 2", n, reports)
+	if n != 3 || reports != 3 {
+		t.Fatalf("removed %d samples / %d reports, want 3 / 3", n, reports)
 	}
 	var raw int
 	_ = st.pool.QueryRow(ctx, `SELECT count(*) FROM usage_samples`).Scan(&raw)
@@ -54,7 +62,8 @@ func TestAggregateUsageRollsUpAndKeepsTotals(t *testing.T) {
 	if daily != 3000 {
 		t.Fatalf("daily total = %d, want 3000", daily)
 	}
-	// Dashboard totals are unchanged by the roll-up.
+	// Dashboard totals are unchanged by the roll-up, except the unbillable
+	// unknown-service bytes, which are dropped.
 	after, _ := st.Summary(ctx, npubA)
 	if after.UsageBytes != 3500 {
 		t.Fatalf("usage after = %d, want 3500", after.UsageBytes)
