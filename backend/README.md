@@ -45,8 +45,10 @@ in a stateless HMAC-signed session cookie keyed to the npub:
   enabled and the request arrives from an fd00::/8 source,
   the npub-derived source address authenticates the identity with no signature.
   A `?npub=` claim is accepted only if it derives to the trusted source address
-  (`fipsaddr.CheckDerivation`). Enable only on a fips-bound listener with no
-  proxy masking the source.
+  (`fipsaddr.CheckDerivation`). Its strength is the mesh's source-address
+  integrity, so it must only ever see real client addresses: run the backend
+  with host networking on a fips-reachable listener, and set it to `0` if a
+  reverse proxy sits in front and masks the source.
 
 Pages: `/login`, `/dashboard` (packages, usage, whitelist management),
 `/captive` (landing for the exit's redirect; verifies the captive token).

@@ -310,15 +310,15 @@ func (a *Agent) collectAndBuffer() error {
 	a.mu.Unlock()
 
 	epoch := counterEpoch()
-	return a.store.withRuntime(func(rt *runtime) {
+	var total uint64
+	err = a.store.withRuntime(func(rt *runtime) {
 		samples, next := computeDelta(rt.Baselines, cur, services)
 		rt.Baselines = next
 		rt.CounterEpoch = epoch
-		var total uint64
+		total = 0
 		for _, s := range samples {
 			total += s.Bytes
 		}
-		a.metrics.collected(total, a.now())
 		if len(samples) == 0 {
 			return
 		}
@@ -335,6 +335,12 @@ func (a *Agent) collectAndBuffer() error {
 			a.metrics.usageDrop(drop)
 		}
 	})
+	if err != nil {
+		return err
+	}
+	// Only a persisted collection counts as a success.
+	a.metrics.collected(total, a.now())
+	return nil
 }
 
 // flushBuffer delivers queued reports oldest-first, dropping each on ack and

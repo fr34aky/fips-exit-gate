@@ -12,20 +12,21 @@ import (
 )
 
 // Setup installs the default slog handler according to LOG_FORMAT ("text",
-// the default, or "json") and LOG_LEVEL ("debug", "info", "warn", "error"),
+// the default, or "json") and LOG_LEVEL ("debug" or "info", default "info"),
 // tags every record with service=<name>, and redirects the standard log
 // package to it (log.Printf -> level INFO, log.Fatal -> exits as before).
+//
+// Levels above info are deliberately not offered: today every record arrives
+// through the std-log bridge at INFO, so "warn" or "error" would silence the
+// binaries entirely, including the message of a log.Fatal.
 func Setup(service string) {
-	var level slog.Level
+	level := slog.LevelInfo
 	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "", "info":
 	case "debug":
 		level = slog.LevelDebug
-	case "warn", "warning":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
 	default:
-		level = slog.LevelInfo
+		defer func() { log.Printf("logging: LOG_LEVEL=%q not supported (use debug|info); using info", os.Getenv("LOG_LEVEL")) }()
 	}
 	opts := &slog.HandlerOptions{Level: level}
 	var h slog.Handler
@@ -34,9 +35,7 @@ func Setup(service string) {
 	} else {
 		h = slog.NewTextHandler(os.Stderr, opts)
 	}
-	logger := slog.New(h).With("service", service)
-	slog.SetDefault(logger)
-	// slog.SetDefault already points the log package at the handler; make
-	// sure plain log output carries no duplicate timestamp prefix.
-	log.SetFlags(0)
+	// SetDefault also points the std log package at this handler (level INFO)
+	// and clears its timestamp prefix.
+	slog.SetDefault(slog.New(h).With("service", service))
 }

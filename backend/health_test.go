@@ -36,7 +36,13 @@ func TestHealthAndReadiness(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version = '0001_init.sql'`); err != nil {
 		t.Fatal(err)
 	}
-	resp, _ := http.Get(srv.URL + "/readyz")
+	// A fresh router has an empty readiness cache.
+	srv2 := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
+	defer srv2.Close()
+	resp, err := http.Get(srv2.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if body := readAll(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "0001_init.sql") {
 		t.Fatalf("readyz with a missing migration: %d %s", resp.StatusCode, body)
 	}

@@ -14,11 +14,13 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 func main() {
@@ -165,11 +167,13 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// /readyz is public and touches the database, so its verdict is cached
+	// for a few seconds: a flood of probes costs one query per window, not
+	// one pool connection per request.
+	ready := &readyCache{check: st.Ready}
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-		if err := st.Ready(ctx); err != nil {
+		if err := ready.get(r.Context()); err != nil {
 			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -208,6 +212,29 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	p.routes(mux)
 
 	return mux
+}
+
+// readyCache memoizes a readiness check for readyTTL.
+type readyCache struct {
+	check func(context.Context) error
+	mu    sync.Mutex
+	at    time.Time
+	err   error
+}
+
+const readyTTL = 5 * time.Second
+
+func (c *readyCache) get(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && time.Since(c.at) < readyTTL {
+		return c.err
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	c.err = c.check(cctx)
+	c.at = time.Now()
+	return c.err
 }
 
 // secretEnv returns the named secret, or a random ephemeral one (logged) if

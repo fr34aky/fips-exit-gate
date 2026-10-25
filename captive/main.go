@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 type config struct {

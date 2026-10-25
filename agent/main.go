@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 func main() {
