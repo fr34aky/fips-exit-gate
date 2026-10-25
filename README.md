@@ -99,6 +99,14 @@ Store integration tests run only when `TEST_DATABASE_URL` is set (use a
 throwaway database, never a live one — the tests reset the schema) and require
 `-p 1`. See [Configuration](docs/configuration.md#tests-and-development).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, required checks and
+the release process, [PR-REVIEW.md](PR-REVIEW.md) for the review checklist
+every PR goes through, and [CHANGELOG.md](CHANGELOG.md) for what changed
+between releases. Versions follow Semantic Versioning and come from git tags;
+`pkg/version` reports the build's version.
+
 ## License
 
 [MIT](LICENSE) © fr34aky

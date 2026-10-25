@@ -18,6 +18,7 @@ import (
 
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
+	"github.com/fr34aky/fips-exit-gate/pkg/version"
 )
 
 func main() {
@@ -140,7 +141,7 @@ func main() {
 		_ = srv.Shutdown(sctx)
 	}()
 
-	log.Printf("backend listening on %s", listen)
+	log.Printf("backend %s listening on %s", version.String(), listen)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("backend: %v", err)
 	}

@@ -6,7 +6,9 @@ WORKDIR /src
 COPY go.mod ./
 COPY pkg ./pkg
 COPY agent ./agent
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+# Build version (git describe); see pkg/version and CONTRIBUTING.md#releasing.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X github.com/fr34aky/fips-exit-gate/pkg/version.Version=${VERSION}" \
     -o /out/agent ./agent
 
 FROM docker.io/library/debian:bookworm-slim
