@@ -21,6 +21,7 @@ import (
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
 	"github.com/fr34aky/fips-exit-gate/pkg/logging"
+	"github.com/fr34aky/fips-exit-gate/pkg/version"
 )
 
 func main() {
@@ -188,7 +189,7 @@ func main() {
 	errc := make(chan error, len(servers))
 	for _, s := range servers {
 		s := s
-		log.Printf("backend listening on %s", s.Addr)
+		log.Printf("backend %s listening on %s", version.String(), s.Addr)
 		go func() { errc <- s.ListenAndServe() }()
 	}
 	if err := <-errc; err != nil && err != http.ErrServerClosed {
