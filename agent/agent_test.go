@@ -319,11 +319,18 @@ func (b *erroringBackend) postUsage(context.Context, usageReport) (usageAck, err
 // briefly then reports "unchanged" — emulating the long-poll so the sync loop
 // paces itself instead of hot-spinning.
 type recordingBackend struct {
-	mu       sync.Mutex
-	full     authzResponse
-	hbResync bool
-	hbCalled chan struct{}
-	lastHB   heartbeatRequest
+	mu         sync.Mutex
+	full       authzResponse
+	hbResync   bool
+	hbCalled   chan struct{}
+	lastHB     heartbeatRequest
+	deltaPolls int // getAuthz calls with a cursor (not full): the sync loop is past its startup reconcile
+}
+
+func (b *recordingBackend) deltaPolled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.deltaPolls > 0
 }
 
 func (b *recordingBackend) setAuth(string, string) {}
@@ -337,6 +344,9 @@ func (b *recordingBackend) getAuthz(ctx context.Context, rev int64, _ int, full 
 		b.mu.Unlock()
 		return full, nil
 	}
+	b.mu.Lock()
+	b.deltaPolls++
+	b.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return authzResponse{}, ctx.Err()
@@ -400,6 +410,11 @@ func TestPeriodicFullReconcileRepairsDrift(t *testing.T) {
 
 	// Startup reconcile grants the address.
 	waitFor(t, time.Second, "startup grant", func() bool { return fw.has(mkAddr("fd00::1")) })
+	// The grant becomes visible before the loop records the time of that full
+	// reconcile. Jumping the clock in that window would stamp lastFull in the
+	// future and the periodic pull would never come due; the first delta poll
+	// proves the startup iteration is complete.
+	waitFor(t, time.Second, "first delta poll", be.deltaPolled)
 
 	// Out-of-band flush; backend rev stays 5, so the delta poll returns nothing.
 	_ = fw.ApplyAuthorized(nil, []netip.Addr{mkAddr("fd00::1")})
