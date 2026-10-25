@@ -176,12 +176,12 @@ func (s *Store) CreateWgPeer(ctx context.Context, sessionNpub, forNpub, label, p
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "wg:"+addr.String()); err != nil {
 			return err
 		}
-		// Permission: self, or a guest/owner entry on the session's account.
+		// Permission: self, or an accepted (not pending) entry on the session's account.
 		if forNpub != sessionNpub {
 			var ok bool
 			if err := tx.QueryRow(ctx,
 				`SELECT EXISTS (SELECT 1 FROM whitelist_entries w JOIN accounts a ON a.id = w.account_id
-				   WHERE a.npub = $1 AND w.npub = $2 AND w.enabled)`, sessionNpub, forNpub).Scan(&ok); err != nil {
+				   WHERE a.npub = $1 AND w.npub = $2 AND w.enabled AND NOT w.pending)`, sessionNpub, forNpub).Scan(&ok); err != nil {
 				return err
 			}
 			if !ok {
@@ -191,7 +191,7 @@ func (s *Store) CreateWgPeer(ctx context.Context, sessionNpub, forNpub, label, p
 		// Attach to the account the address is active on.
 		var accountID string
 		err := tx.QueryRow(ctx,
-			`SELECT account_id::text FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled LIMIT 1`,
+			`SELECT account_id::text FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled AND NOT pending LIMIT 1`,
 			addr.String()).Scan(&accountID)
 		if err == pgx.ErrNoRows {
 			return ErrWgNotActive
