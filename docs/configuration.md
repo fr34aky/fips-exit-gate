@@ -40,6 +40,7 @@ Read by `backend/` (see `backend/main.go`).
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |
 | `EXPIRY_SWEEP_S` | `60` | Timer-driven recompute of the authorized set, so entitlements that lapse while an account is idle are revoked promptly. `0` disables. |
 | `AUTHZ_ALLOW_MASS_REVOKE` | `0` | `1` marks full authz responses `force: true`, so agents apply a full reconcile even when it would revoke most of their live set. Use deliberately (e.g. after purging accounts), then unset. |
+| `MAX_GUESTS_PER_ACCOUNT` | `5` | Maximum guest identities an account may invite (pending or accepted). The admin API is not capped. |
 | `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |

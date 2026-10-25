@@ -22,6 +22,8 @@ type Store struct {
 
 	statusMu    sync.Mutex
 	statusCache authzStatus // AuthzStatus memo, keyed by revision
+	// MaxGuests caps guest invitations per account (0 = DefaultMaxGuests).
+	MaxGuests int
 }
 
 // Open connects to Postgres and applies pending migrations.

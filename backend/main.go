@@ -45,6 +45,7 @@ func main() {
 	if err := st.SeedPackages(ctx); err != nil {
 		log.Fatalf("backend: seed packages: %v", err)
 	}
+	st.MaxGuests = getenvInt("MAX_GUESTS_PER_ACCOUNT", store.DefaultMaxGuests)
 
 	h := &handlers{
 		store:           st,
@@ -178,6 +179,7 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	mux.Handle("POST /admin/whitelist", requireAdmin(adminToken, h.adminWhitelist))
 	mux.Handle("POST /admin/credit", requireAdmin(adminToken, h.adminCredit))
 	mux.Handle("GET /admin/authz", requireAdmin(adminToken, h.adminAuthz))
+	mux.Handle("GET /admin/accounts/{npub}", requireAdmin(adminToken, h.adminInspect))
 	mux.Handle("GET /admin/packages", requireAdmin(adminToken, h.adminListPackages))
 	mux.Handle("POST /admin/packages", requireAdmin(adminToken, h.adminCreatePackage))
 	mux.Handle("DELETE /admin/packages/{id}", requireAdmin(adminToken, h.adminDeactivatePackage))

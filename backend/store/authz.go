@@ -29,12 +29,13 @@ const AuthzChannel = "fips_authz"
 // authz_revisions, whose max(rev) is the global revision the agents poll.
 
 // desiredSQL selects the addresses that SHOULD be authorized right now: every
-// enabled whitelist entry of an active account that has an active entitlement.
+// enabled, accepted (not pending) whitelist entry of an active account that
+// has an active entitlement.
 const desiredSQL = `
 SELECT host(w.fips_addr), w.account_id::text
 FROM whitelist_entries w
 JOIN accounts a ON a.id = w.account_id
-WHERE w.enabled AND a.status = 'active'
+WHERE w.enabled AND NOT w.pending AND a.status = 'active'
   AND EXISTS (
     SELECT 1 FROM entitlements e
     WHERE e.account_id = w.account_id
@@ -60,9 +61,15 @@ func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev i
 		}
 		changed := false
 		for addr, acct := range desired {
-			if _, ok := current[addr]; ok {
+			if cur, ok := current[addr]; ok && cur == acct {
 				continue
 			}
+			// New member, or a member whose attribution moved to another account
+			// (a guest accepted an invitation, or switched back to their own
+			// account) while staying authorized. Record the move too: usage is
+			// billed to authz_current's account, and the revision log's account
+			// is what late-usage attribution falls back to. Agents only see an
+			// idempotent re-add.
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO authz_current(fips_addr, account_id) VALUES ($1::inet, $2)
 				 ON CONFLICT (fips_addr) DO UPDATE SET account_id = EXCLUDED.account_id`, addr, acct); err != nil {

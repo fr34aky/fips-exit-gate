@@ -41,6 +41,7 @@ type portal struct {
 	publicURL       string                  // portal base URL for checkout/pay redirects
 	pacHost         string                  // exit <npub>.fips host for served PACs ("" = derive from publicURL)
 	tmpl            *template.Template
+	inviteLimit     *rateLimiter // per-npub cap on guest invitations
 }
 
 func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []byte, trustFips, secure bool) (*portal, error) {
@@ -52,6 +53,7 @@ func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []
 	return &portal{
 		store: st, sessionSecret: sessionSecret, challengeSecret: challengeSecret,
 		captiveSecret: captiveSecret, trustFipsSource: trustFips, secureCookies: secure, tmpl: tmpl,
+		inviteLimit: newRateLimiter(10, 10*time.Minute),
 	}, nil
 }
 
@@ -65,6 +67,9 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard", p.dashboard)
 	mux.HandleFunc("POST /whitelist/add", p.whitelistAdd)
 	mux.HandleFunc("POST /whitelist/toggle", p.whitelistToggle)
+	mux.HandleFunc("POST /whitelist/accept", p.whitelistAccept)
+	mux.HandleFunc("POST /whitelist/decline", p.whitelistDecline)
+	mux.HandleFunc("POST /whitelist/use-own", p.whitelistUseOwn)
 	mux.HandleFunc("GET /captive", p.captive)
 	mux.HandleFunc("GET /help", p.help)
 	mux.HandleFunc("GET /proxy-clear.pac", p.pacFor("clearnet")) // Connectivity profile
@@ -379,7 +384,30 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error loading account", http.StatusInternalServerError)
 		return
 	}
-	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err")}
+	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err"),
+		"Msg": r.URL.Query().Get("msg")}
+	// The nostr-login gap: someone who signed in with a nostr key from a fips
+	// node whose address is not on this account would otherwise pay and never
+	// be authorized (the exit only knows addresses). Point it out while they
+	// are on that very device.
+	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
+		onAccount := false
+		for _, entry := range summary.Whitelist {
+			if entry.Addr == src {
+				onAccount = true
+			}
+		}
+		if !onAccount {
+			data["ThisDevice"] = src.String()
+		}
+	}
+	// The owner row can be parked with nothing active for the address (host
+	// disabled the guest, support intervened): always offer the way back.
+	for _, entry := range summary.Whitelist {
+		if entry.Role == "owner" && !entry.Enabled {
+			data["OwnerParked"] = true
+		}
+	}
 	if clear, priv := p.pacLinks(r.Context()); clear != "" {
 		data["PacClearURL"] = clear
 		data["PacPrivURL"] = priv // may be "" if Privacy isn't enabled
@@ -387,18 +415,83 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 	p.render(w, "dashboard.html", data)
 }
 
+// whitelistAdd invites a guest npub. The invitation is pending until the guest
+// accepts it from their own dashboard — with one shortcut: if the request
+// arrives over fips FROM the invited address, the requester demonstrably
+// controls that device, so the invitation is accepted on the spot (the common
+// "add this laptop I'm sitting at" case).
 func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
 	npub, ok := p.session(r)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	err := p.store.AddWhitelist(r.Context(), npub, strings.TrimSpace(r.FormValue("guest_npub")), strings.TrimSpace(r.FormValue("label")))
+	if !p.inviteLimit.allow(npub) {
+		http.Redirect(w, r, "/dashboard?err="+urlq("Too many invitations in a short time; try again later."), http.StatusSeeOther)
+		return
+	}
+	guest := strings.TrimSpace(r.FormValue("guest_npub"))
+	pending, err := p.store.InviteGuest(r.Context(), npub, guest, strings.TrimSpace(r.FormValue("label")))
 	if err != nil {
 		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
 		return
 	}
+	if !pending {
+		http.Redirect(w, r, "/dashboard?msg="+urlq("That identity is already active on your account (label updated)."), http.StatusSeeOther)
+		return
+	}
+	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
+		if gaddr, err := fipsaddr.FromNpub(guest); err == nil && gaddr == src {
+			if err := p.store.AcceptInvite(r.Context(), guest, npub); err == nil {
+				http.Redirect(w, r, "/dashboard?msg="+urlq("This device is now on your account."), http.StatusSeeOther)
+				return
+			} else {
+				log.Printf("portal: same-device accept for %s: %v", npub, err)
+			}
+		}
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("Invitation sent. It takes effect once that identity accepts it from its own dashboard."), http.StatusSeeOther)
+}
+
+func (p *portal) whitelistAccept(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.AcceptInvite(r.Context(), npub, strings.TrimSpace(r.FormValue("host_npub"))); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("You now share that account's package."), http.StatusSeeOther)
+}
+
+func (p *portal) whitelistDecline(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.DeclineInvite(r.Context(), npub, strings.TrimSpace(r.FormValue("host_npub"))); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// whitelistUseOwn re-attaches the signed-in npub's address to its own account
+// (undoing an accepted invitation).
+func (p *portal) whitelistUseOwn(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.ActivateOwner(r.Context(), npub); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("Your traffic now draws on your own packages."), http.StatusSeeOther)
 }
 
 func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
@@ -794,6 +887,14 @@ func friendlyErr(err error) string {
 	switch err {
 	case store.ErrAddressInUse:
 		return "That identity is already active on another account."
+	case store.ErrGuestLimit:
+		return "You have reached the maximum number of shared identities for this account."
+	case store.ErrNoActiveEntitlement:
+		return "That account has no active package right now — only accounts with an active package can share one."
+	case store.ErrSelfWhitelist:
+		return "That is this account's own identity."
+	case store.ErrInviteNotFound:
+		return "That invitation no longer exists."
 	default:
 		return "Could not add that identity (check the npub)."
 	}
