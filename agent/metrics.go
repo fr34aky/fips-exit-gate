@@ -25,6 +25,8 @@ type agentMetrics struct {
 	usageSent       *metrics.Counter
 	usageDropped    *metrics.Counter
 	usageBuffered   *metrics.Gauge
+	massRevokeRef   *metrics.Counter
+	fullSyncs       *metrics.Counter
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -41,6 +43,8 @@ func newAgentMetrics() *agentMetrics {
 		usageSent:       r.Counter("fipsexit_agent_usage_reports_sent_total", "Usage reports delivered to the backend"),
 		usageDropped:    r.Counter("fipsexit_agent_usage_reports_dropped_total", "Usage reports dropped (buffer full)"),
 		usageBuffered:   r.Gauge("fipsexit_agent_usage_reports_buffered", "Usage reports currently buffered on disk"),
+		massRevokeRef:   r.Counter("fipsexit_agent_mass_revoke_refusals_total", "Full reconciles refused because they would revoke most of the live set"),
+		fullSyncs:       r.Counter("fipsexit_agent_full_syncs_total", "Full (rev=0) reconciles applied"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -93,6 +97,18 @@ func (m *agentMetrics) setBuffered(n int) {
 		return
 	}
 	m.usageBuffered.Set(float64(n))
+}
+func (m *agentMetrics) massRevokeRefused() {
+	if m == nil {
+		return
+	}
+	m.massRevokeRef.Inc()
+}
+func (m *agentMetrics) fullSync() {
+	if m == nil {
+		return
+	}
+	m.fullSyncs.Inc()
 }
 func (m *agentMetrics) setAuthorized(n int) {
 	if m == nil {

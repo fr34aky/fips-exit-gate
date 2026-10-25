@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -34,6 +35,14 @@ func main() {
 	client := newBackendClient(baseURL)
 	fw := newNftFirewall(nftPath, table)
 	a := newAgent(st, client, fw, nodeName, enrollToken, failClosed, bufferCap)
+	a.fullSyncEvery = time.Duration(getenvInt("FIPS_AGENT_FULL_SYNC_S", 300)) * time.Second
+	a.heartbeatEvery = time.Duration(getenvInt("FIPS_AGENT_HEARTBEAT_S", 60)) * time.Second
+	a.longPollWait = time.Duration(clampInt(getenvInt("FIPS_AGENT_LONGPOLL_S", 50), 5, 55)) * time.Second
+	a.massRevokeMin = getenvInt("FIPS_AGENT_MASS_REVOKE_MIN", 50)
+	a.allowMassRevoke = os.Getenv("FIPS_AGENT_ALLOW_MASS_REVOKE") == "1"
+	if a.allowMassRevoke {
+		log.Printf("agent: FIPS_AGENT_ALLOW_MASS_REVOKE=1 — full reconciles may revoke most of the set")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -64,6 +73,16 @@ func getenvInt(k string, def int) int {
 		}
 	}
 	return def
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func hostnameOr(def string) string {

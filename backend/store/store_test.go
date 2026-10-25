@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/fr34aky/fips-exit-gate/pkg/authzhash"
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
@@ -259,24 +260,27 @@ func TestPurchaseSettleGrantsAuthz(t *testing.T) {
 	}
 }
 
-// TestAuthzStatus checks the count+revision snapshot the heartbeat uses to
-// detect an exit whose kernel set has drifted from authz_current.
+// TestAuthzStatus checks the count+hash+revision snapshot the heartbeat uses
+// to detect an exit whose kernel set has drifted from authz_current.
 func TestAuthzStatus(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	count, baseRev, err := st.AuthzStatus(ctx)
+	count, emptyHash, baseRev, err := st.AuthzStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
 		t.Fatalf("count=%d, want 0 on empty set", count)
 	}
+	if emptyHash != authzhash.Of(nil) {
+		t.Fatalf("empty-set hash %q != authzhash.Of(nil)", emptyHash)
+	}
 
 	if err := st.CreditTime(ctx, npubA, 1); err != nil {
 		t.Fatal(err)
 	}
-	count, rev, err := st.AuthzStatus(ctx)
+	count, hash, rev, err := st.AuthzStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,5 +289,9 @@ func TestAuthzStatus(t *testing.T) {
 	}
 	if rev <= baseRev {
 		t.Fatalf("rev did not advance after grant: %d <= %d", rev, baseRev)
+	}
+	// The hash must be exactly what an agent computes over the same members.
+	if want := authzhash.Of([]netip.Addr{addrOf(t, npubA)}); hash != want {
+		t.Fatalf("hash %q != agent-side hash %q", hash, want)
 	}
 }

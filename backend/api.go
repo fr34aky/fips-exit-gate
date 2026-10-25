@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -22,6 +23,17 @@ type handlers struct {
 	store          *store.Store
 	usageIntervalS int
 	graceMinutes   int
+
+	// revs wakes authz long-polls on a revision change (nil = poll only).
+	revs *revWaiter
+	// fallbackPoll bounds how long a long-poll sleeps between revision checks
+	// when no notification arrives (missed NOTIFY, no listener). Zero = 5 s.
+	fallbackPoll time.Duration
+	// allowMassRevoke marks full-set responses with force=true so agents apply
+	// them even when that would remove most of their live set. Off by default:
+	// agents refuse such a reconcile as a guard against an empty/truncated
+	// set (DB restore, broken recompute) revoking every paying user at once.
+	allowMassRevoke bool
 }
 
 // --- agent-facing endpoints -------------------------------------------------
@@ -47,45 +59,62 @@ func (h *handlers) enroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"node_id": nodeID, "auth_token": token})
 }
 
+// authz is the agent long-poll. `rev` is the agent's cursor (0 = give me the
+// full set); `full=1` asks for the full set right now even when the backend's
+// revision is still 0, so an agent reconciling a fresh backend can still clear
+// stale kernel entries (without it, rev 0 == cur 0 would long-poll to a 204 and
+// the agent would record the reconcile as done without removing anything).
 func (h *handlers) authz(w http.ResponseWriter, r *http.Request) {
 	clientRev, _ := strconv.ParseInt(r.URL.Query().Get("rev"), 10, 64)
 	wait, _ := strconv.Atoi(r.URL.Query().Get("wait"))
 	if wait <= 0 || wait > 55 {
 		wait = 25
 	}
+	full := r.URL.Query().Get("full") == "1" || r.URL.Query().Get("full") == "true"
 	ctx := r.Context()
 	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	poll := h.fallbackPoll
+	if poll <= 0 {
+		poll = 5 * time.Second
+	}
 	for {
 		cur, err := h.store.CurrentRev(ctx)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
-		if clientRev != cur {
-			h.writeAuthz(w, ctx, clientRev)
+		if full || clientRev != cur {
+			h.writeAuthz(w, ctx, clientRev, full)
 			return
 		}
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if remaining < poll {
+			poll = remaining
+		}
+		// Wake on a NOTIFY from RecomputeAuthz, or re-check after the fallback
+		// interval in case one was missed.
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(200 * time.Millisecond):
+		case <-h.revs.wait():
+		case <-time.After(poll):
 		}
 	}
 }
 
-func (h *handlers) writeAuthz(w http.ResponseWriter, ctx context.Context, clientRev int64) {
-	if clientRev == 0 {
+func (h *handlers) writeAuthz(w http.ResponseWriter, ctx context.Context, clientRev int64, full bool) {
+	if full || clientRev == 0 {
 		members, rev, err := h.store.FullSet(ctx)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"rev": rev, "full": true, "addresses": toMembers(members),
+			"rev": rev, "full": true, "addresses": toMembers(members), "force": h.allowMassRevoke,
 		})
 		return
 	}
@@ -137,6 +166,7 @@ func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 		Version  string `json:"version"`
 		AuthzRev int64  `json:"authz_rev"`
 		SetSize  int    `json:"set_size"`
+		SetHash  string `json:"set_hash"`
 	}
 	_ = decodeQuiet(r, &req)
 	services, err := h.store.Heartbeat(r.Context(), nodeID, req.Version)
@@ -149,13 +179,21 @@ func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 		svc = append(svc, map[string]any{"key": s.Key, "port": s.Port})
 	}
 	// Drift detection: if the node claims to be caught up (its rev matches ours)
-	// yet its live set size differs from authz_current, the node's kernel set has
+	// yet its live set differs from authz_current, the node's kernel set has
 	// drifted out-of-band and its revision cursor can't detect it. Ask it to force
 	// a full reconcile. We only flag at an EQUAL revision so a node that is merely
 	// behind (and will catch up via the normal delta) isn't needlessly resynced.
+	// Agents that report a set_hash are compared member-by-member (same size,
+	// different members is drift too); older agents fall back to the size. A
+	// negative set_size means the agent could not read its set — not drift.
 	resync := false
-	if count, rev, err := h.store.AuthzStatus(r.Context()); err == nil {
-		resync = req.AuthzRev == rev && req.SetSize != count
+	if count, hash, rev, err := h.store.AuthzStatus(r.Context()); err == nil && req.AuthzRev == rev {
+		switch {
+		case req.SetHash != "":
+			resync = req.SetHash != hash
+		case req.SetSize >= 0:
+			resync = req.SetSize != count
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": map[string]any{
@@ -186,7 +224,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func decodeQuiet(r *http.Request, v any) error {
-	return json.NewDecoder(r.Body).Decode(v)
+	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
