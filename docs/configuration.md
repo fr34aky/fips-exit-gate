@@ -52,6 +52,11 @@ Read by `backend/` (see `backend/main.go`).
 | `RETENTION_DAYS` | `90` | Raw per-window usage samples older than this are rolled up into per-day totals and deleted (dashboard totals unchanged). `0` disables. |
 | `REVISION_RETENTION_DAYS` | `30` | Authz revision-log rows older than this are compacted (the newest row is always kept; an agent with an older cursor receives a full set). `0` disables. |
 | `RETENTION_SWEEP_S` | `3600` | How often the two retention steps run. |
+| `WG_POOL4` | `10.64.0.0/16` | WireGuard inner IPv4 pool (peers get pool+idx; `.1` is the exit). Must equal every exit's `WG_POOL4`. `/24` or larger. |
+| `WG_POOL6` | `fc10:f1b5:ea17::/64` | Inner IPv6 pool (outside fips' fd00::/8). `/64` or larger. |
+| `WG_PORT` | `51820` | WireGuard UDP port on the exits (informational for agents). |
+| `WG_MTU` | `1280` | `MTU =` in rendered client configs (the fips TUN MTU). |
+| `WG_MAX_PEERS_PER_ADDR` | `5` | WireGuard devices per fips identity (a gateway router may front several phones). |
 | `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |
@@ -107,6 +112,12 @@ captive containers.
 | `CAPTIVE_PORTAL_URL` | `http://<npub>.fips:8080/captive` | Where the captive `302` sends unauthorized clients. Prefer the portal host's `<npub>.fips` URL (see note below). |
 | `CAPTIVE_TOKEN_SECRET` | (secret) | Signs the captive token. **Must equal the backend's value.** |
 | `MAX_CONNS_PER_SRC` | `0` | Per-source concurrent-connection ceiling baked into the gate by `render-nftables.sh` (e.g. `256`). `0` = disabled. See [Hardening](hardening.md). |
+| `WG_IF` | — | WireGuard interface (e.g. `wg0`). When set, `render-nftables.sh` emits the tunnel forward/NAT policy and `up.sh` checks forwarding prerequisites. See [WireGuard](wireguard.md). |
+| `WG_PORT` | `51820` | The WireGuard UDP port; a guarded port (refused from fips until `wg 51820 udp` is in `services.conf`). |
+| `WG_POOL4` / `WG_GW4` | `10.64.0.0/16` / `10.64.0.1` | Inner IPv4 pool and the exit's gateway/resolver address. Must equal the backend's `WG_POOL4` and `wg0.conf`. |
+| `WG_POOL6` / `WG_GW6` | `fc10:f1b5:ea17::/64` / `fc10:f1b5:ea17::1` | Inner IPv6 pool and gateway. |
+| `WG_MSS` | `1140` | TCP MSS clamp for tunnel traffic (1280 − 80 − 40 − 20). |
+| `WG_IPV6_EGRESS` | `1` | `1` masquerades inner IPv6 out `EXTERNAL_IF`; `0` refuses inner IPv6 fast (exit without global IPv6). |
 
 The same file also carries the agent variables below when the agent runs under
 compose.
@@ -132,6 +143,10 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_ALLOW_MASS_REVOKE` | `0` | `1` disables the mass-revoke guard on this node. |
 | `FIPS_AGENT_METRICS_ADDR` | — | If set (e.g. `:9101`), serve Prometheus `/metrics` here. Empty = disabled. |
 | `FIPS_AGENT_ALLOW_INSECURE` | `0` | The agent accepts `https://`, or plain `http://` only to loopback, a fips address or a `.fips` name (the mesh encrypts end to end). `1` allows plain http to any host (the node token then crosses the network unencrypted). |
+| `FIPS_AGENT_WG_IF` | — | WireGuard interface to manage peers on (e.g. `wg0`). Enables the peer sync and the heartbeat announcement. |
+| `FIPS_AGENT_WG_ENDPOINT` | — (**required with `FIPS_AGENT_WG_IF`**) | What clients dial: the exit's `<npub>.fips` name and `WG_PORT`, e.g. `npub1…exit….fips:51820`. |
+| `FIPS_AGENT_WG` | `wg` | Path to the `wg` binary. |
+| `FIPS_AGENT_WG_SYNC_S` | `15` | Peer-table poll interval. |
 
 The agent needs `CAP_NET_ADMIN` (it shells out to `nft`) — the compose service
 grants it; under systemd the unit does.
@@ -195,8 +210,10 @@ Read by `captive/`. Under compose these come from `deploy/.env`/compose.
 
 ### `deploy/services.conf` — the egress service catalog (gate)
 
-One `<key> <port>` per line; the single source of truth `render-nftables.sh`
-templates the gate and per-service counters over. Adding a service (e.g. Tor) is
+One `<key> <port> [tcp|udp]` per line (proto defaults to `tcp`); the single
+source of truth `render-nftables.sh` templates the gate and per-service
+counters over. UDP services (WireGuard) are gated per packet without a captive
+redirect. Adding a service (e.g. Tor) is
 one line here **plus** a running SOCKS endpoint on that port **plus** a matching
 catalog row in the backend (`POST /admin/services`). Keep the three in sync.
 

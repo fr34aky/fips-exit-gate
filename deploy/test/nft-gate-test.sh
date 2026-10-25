@@ -11,7 +11,14 @@
 #   5. `acct` counts the authorized client's bytes on (addr, port);
 #   6. the ruleset renders and validates with MAX_CONNS_PER_SRC set;
 #   7. svc_out resets the SERVICE side when it keeps sending to a revoked client;
-#   8. a guarded port missing from services.conf is refused from fips.
+#   8. a guarded port missing from services.conf is refused from fips;
+#   9. the WireGuard UDP service port is gated and metered like the SOCKS ports;
+#  10. the WireGuard tunnel policy: masquerade to the uplink only, private/mesh
+#      destinations and SMTP rejected, clients isolated, only DNS on the gateway
+#      reachable from the tunnel, nothing new from the Internet into it.
+#
+# wg0 and the uplink are veth pairs into namespaces "wgclient" and "internet";
+# WireGuard's crypto is irrelevant to the ruleset, only the interface is.
 #
 # Topology: veth pair; this namespace plays the exit (fips0 = fd00::1, the
 # listeners), namespace "client" plays two fips peers on the far end
@@ -32,7 +39,11 @@ cleanup() {
     kill $(jobs -p) 2>/dev/null
     nft delete table inet fips_exit 2>/dev/null
     ip netns del client 2>/dev/null
+    ip netns del wgclient 2>/dev/null
+    ip netns del internet 2>/dev/null
     ip link del fips0 2>/dev/null
+    ip link del wg0 2>/dev/null
+    ip link del ext0 2>/dev/null
     rm -rf "$work"
 }
 trap cleanup EXIT INT TERM
@@ -48,13 +59,49 @@ ip -n client addr add fd00::2/64 dev cl0 nodad
 ip -n client addr add fd00::3/64 dev cl0 nodad
 ip -n client link set cl0 up
 
+# "wg0": the exit's tunnel interface (a veth here), peer in namespace wgclient.
+ip netns add wgclient
+ip link add wg0 type veth peer name wgc0
+ip link set wgc0 netns wgclient
+ip addr add 10.64.0.1/16 dev wg0
+ip -6 addr add fc10:f1b5:ea17::1/64 dev wg0 nodad
+ip link set wg0 up
+# Like a real WireGuard peer: a /32 + /128 with the gateway as the only
+# next hop, so even other tunnel addresses are sent via the exit.
+ip -n wgclient link set lo up
+ip -n wgclient addr add 10.64.0.5/32 dev wgc0
+ip -n wgclient -6 addr add fc10:f1b5:ea17::5/128 dev wgc0 nodad
+ip -n wgclient link set wgc0 up
+ip -n wgclient route add 10.64.0.1 dev wgc0
+ip -n wgclient route add default via 10.64.0.1
+ip -n wgclient -6 route add fc10:f1b5:ea17::1 dev wgc0
+ip -n wgclient -6 route add default via fc10:f1b5:ea17::1
+# "ext0": the exit's uplink, peer in namespace internet (TEST-NET-3 + a
+# global-looking v6 prefix; 2001:db8::/32 is on the reject list on purpose).
+ip netns add internet
+ip link add ext0 type veth peer name inet0
+ip link set inet0 netns internet
+ip addr add 203.0.113.2/24 dev ext0
+ip -6 addr add 2a0a:dead:beef::2/64 dev ext0 nodad
+ip link set ext0 up
+ip -n internet link set lo up
+ip -n internet addr add 203.0.113.1/24 dev inet0
+ip -n internet -6 addr add 2a0a:dead:beef::1/64 dev inet0 nodad
+ip -n internet link set inet0 up
+ip -n internet route add 10.64.0.0/16 via 203.0.113.2   # so "the Internet" can try to reach into the tunnel
+for f in /proc/sys/net/ipv4/ip_forward /proc/sys/net/ipv6/conf/all/forwarding; do
+    [ "$(cat $f)" = "1" ] || echo "WARNING: $f is $(cat $f); forwarding tests will fail (pass --sysctl at docker run)" >&2
+done
+
 # --- ruleset -------------------------------------------------------------------
-printf 'clearnet 1080\ntor 1081\n' > "$work/services.conf"
+printf 'clearnet 1080\ntor 1081\nwg 51820 udp\n' > "$work/services.conf"
 : > "$work/allowlist.txt"
 render() {
     FIPS_IF=fips0 EXIT_FIPS_ADDR=fd00::1 CAPTIVE_PORT=1088 \
     SERVICES_FILE="$work/services.conf" ALLOWLIST_FILE="$work/allowlist.txt" \
-    MAX_CONNS_PER_SRC="${1:-0}" GUARD_PORTS="1080 1081 3128" sh "$RENDER"
+    MAX_CONNS_PER_SRC="${1:-0}" GUARD_PORTS="1080 1081 3128 51820" \
+    WG_IF=wg0 EXTERNAL_IF=ext0 WG_POOL4=10.64.0.0/16 WG_POOL6=fc10:f1b5:ea17::/64 \
+    WG_GW4=10.64.0.1 WG_GW6=fc10:f1b5:ea17::1 sh "$RENDER"
 }
 # packets counter of the svc_in / svc_out rule whose text matches $2.
 rule_packets() {
@@ -72,6 +119,16 @@ socat TCP6-LISTEN:1088,fork,reuseaddr SYSTEM:'echo CAPTIVE' &
 socat TCP6-LISTEN:1081,bind=[fd00::1],fork,reuseaddr SYSTEM:'echo TICKER; while sleep 0.2; do echo tick || exit; done' 2>/dev/null &
 # :3128 bound but NOT in services.conf (guarded port).
 socat TCP6-LISTEN:3128,bind=[fd00::1],fork,reuseaddr SYSTEM:'echo UNGATED' &
+# :51820/udp "WireGuard": answers any datagram (stands in for a handshake reply).
+socat UDP6-LISTEN:51820,bind=[fd00::1],fork,reuseaddr SYSTEM:'echo UDPOK' &
+# Host services as seen from the tunnel: a resolver on the gateway (allowed) and
+# something else on the gateway (must be closed).
+socat UDP4-LISTEN:53,bind=10.64.0.1,fork,reuseaddr SYSTEM:'echo DNSOK' &
+socat TCP4-LISTEN:8080,bind=10.64.0.1,fork,reuseaddr SYSTEM:'echo HOSTSVC' &
+# "Internet" services: report the peer address they saw (proves masquerade).
+ip netns exec internet socat TCP4-LISTEN:8080,fork,reuseaddr SYSTEM:'echo PEER=$SOCAT_PEERADDR' &
+ip netns exec internet socat TCP6-LISTEN:8080,ipv6only=1,fork,reuseaddr SYSTEM:'echo PEER=$SOCAT_PEERADDR' &   # v6-only: the v4 listener holds 0.0.0.0:8080
+ip netns exec internet socat TCP4-LISTEN:25,fork,reuseaddr SYSTEM:'echo SMTP' &
 sleep 0.5
 
 # cl SRC PORT: connect from the client namespace with the given source, print
@@ -143,6 +200,55 @@ out="$(cl fd00::2 3128)"
 guard="$(rule_packets svc_in 'not in services.conf')"
 if [ -z "$out" ] && [ "${guard:-0}" -ge 1 ]; then pass "uncatalogued :3128 refused from fips (rule fired)"; else failed "uncatalogued port: out='$out' counter=$guard"; fi
 nft delete element inet fips_exit authorized '{ fd00::2 }'
+
+# 9. WireGuard UDP port: gated by the same set, metered on (addr, 51820).
+ucl() { ip netns exec wgclient true; echo hi | ip netns exec client timeout 4 socat -T1 -t1 - "UDP6:[fd00::1]:51820,bind=[$1]" 2>/dev/null; }
+before="$(rule_packets svc_in 'udp dport 51820 ip6 saddr != @authorized')"
+out="$(ucl fd00::3)"
+after="$(rule_packets svc_in 'udp dport 51820 ip6 saddr != @authorized')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "unauthorized UDP to :51820 dropped (rule fired)"; else failed "unauthorized UDP: out='$out' counter $before->$after"; fi
+nft add element inet fips_exit authorized '{ fd00::2 }'
+out="$(ucl fd00::2)"
+[ "$out" = "UDPOK" ] && pass "authorized UDP to :51820 answered" || failed "authorized UDP got '$out'"
+ubytes="$(nft -j list set inet fips_exit acct | tr '{}' '\n\n' | grep -A3 'fd00::2' | grep -B1 -A2 '51820' | grep -o '"bytes": *[0-9]*' | sed 's/[^0-9]//g' | head -1)"
+[ "${ubytes:-0}" -gt 0 ] && pass "acct counted $ubytes UDP bytes for fd00::2 . 51820" || failed "no acct element for fd00::2 . 51820: $(nft list set inet fips_exit acct)"
+nft delete element inet fips_exit authorized '{ fd00::2 }'
+
+# 10. Tunnel policy.
+wcl() { ip netns exec wgclient timeout 5 socat -T2 -t1 - "$1" </dev/null 2>/dev/null; }
+# socat prints the peer in expanded/mapped form (::ffff:203.0.113.2 = cb00:7102).
+out="$(wcl TCP4:203.0.113.1:8080)"
+case "$out" in PEER=*203.0.113.2*|PEER=*cb00:7102*) pass "tunnel client reaches the Internet, masqueraded as the uplink (v4)" ;; *) failed "v4 egress got '$out'" ;; esac
+out="$(wcl 'TCP6:[2a0a:dead:beef::1]:8080')"
+case "$out" in PEER=*2a0a:dead:beef:*:0002*|PEER=*2a0a:dead:beef::2*) pass "tunnel client reaches the Internet, masqueraded as the uplink (v6)" ;; *) failed "v6 egress got '$out'" ;; esac
+before="$(rule_packets wg_egress '10.0.0.0/8')"
+out="$(wcl TCP4:10.0.0.9:80)"
+after="$(rule_packets wg_egress '10.0.0.0/8')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "RFC1918 destination rejected from the tunnel"; else failed "RFC1918: out='$out' counter $before->$after"; fi
+before="$(rule_packets wg_egress 'fc00::/7')"
+out="$(wcl 'TCP6:[fd00::1234]:1080')"   # an on-link fips address that is NOT the exit itself (forwarded, not input)
+after="$(rule_packets wg_egress 'fc00::/7')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "fips (fd00::/8) unreachable through the tunnel"; else failed "fips via tunnel: out='$out' counter $before->$after"; fi
+before="$(rule_packets wg_egress 'dport { 25, 465, 587 }')"
+out="$(wcl TCP4:203.0.113.1:25)"
+after="$(rule_packets wg_egress 'dport { 25, 465, 587 }')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "outbound SMTP rejected from the tunnel"; else failed "SMTP: out='$out' counter $before->$after"; fi
+before="$(rule_packets wg_egress 'oifname "wg0"')"
+wcl TCP4:10.64.0.9:80 >/dev/null
+after="$(rule_packets wg_egress 'oifname "wg0"')"
+[ "${after:-0}" -gt "${before:-0}" ] && pass "client-to-client traffic dropped (isolation)" || failed "isolation rule did not fire ($before->$after)"
+out="$(echo q | ip netns exec wgclient timeout 4 socat -T1 -t1 - UDP4:10.64.0.1:53 2>/dev/null)"
+[ "$out" = "DNSOK" ] && pass "resolver on the gateway reachable from the tunnel" || failed "DNS on gateway got '$out'"
+before="$(rule_packets from_wg 'drop')"
+out="$(wcl TCP4:10.64.0.1:8080)"
+after="$(rule_packets from_wg 'drop')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "other host services closed from the tunnel"; else failed "host svc from tunnel: out='$out' counter $before->$after"; fi
+ip netns exec wgclient socat TCP4-LISTEN:2222,fork,reuseaddr SYSTEM:'echo INSIDE' &
+sleep 0.3
+before="$(rule_packets wg_ingress 'drop')"
+out="$(ip netns exec internet timeout 4 socat -T1 -t1 - TCP4:10.64.0.5:2222 </dev/null 2>/dev/null)"
+after="$(rule_packets wg_ingress 'drop')"
+if [ -z "$out" ] && [ "${after:-0}" -gt "${before:-0}" ]; then pass "new connections from the Internet into the tunnel dropped"; else failed "inbound: out='$out' counter $before->$after"; fi
 
 # 6. render variant with the connection ceiling validates.
 render 4 > "$work/gate-limit.nft" && nft -c -f "$work/gate-limit.nft" && pass "ruleset with MAX_CONNS_PER_SRC validates" || failed "ruleset with MAX_CONNS_PER_SRC rejected"

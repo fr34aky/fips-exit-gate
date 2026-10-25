@@ -88,7 +88,7 @@ and never metered.
 - **[Testing payments](docs/testing-payments.md)** — run the BTCPay, phoenixd, and Cashu fakes to exercise payments with no real node, mint, or channel.
 - **[Whole-device mode](docs/client-tunnel.md)** — route an entire client (not just the browser) through the exit with no proxy settings, using the `deploy/client/` tunnel service.
 
-Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md).
+Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md) · [WireGuard (whole-device, no proxy settings)](docs/wireguard.md).
 
 Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/api-agent-backend.md) · [data model](docs/data-model.md) · [threat model](docs/threat-model.md) · [security review](docs/security-review.md) · payments: [BTCPay](docs/phase4-btcpay.md) · [phoenixd (Lightning)](docs/phoenixd.md).
 

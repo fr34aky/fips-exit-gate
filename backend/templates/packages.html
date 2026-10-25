@@ -36,7 +36,7 @@ through — each counts your traffic at its own rate.</p>
 <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
   <div>
     <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else}}Egress service.{{end}}</div>
+    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else if eq .Key "wg"}}WireGuard: the whole device through the exit, no proxy settings.{{else}}Egress service.{{end}}</div>
   </div>
   <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
 </div></div>

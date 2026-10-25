@@ -24,6 +24,10 @@ type Store struct {
 	statusCache authzStatus // AuthzStatus memo, keyed by revision
 	// MaxGuests caps guest invitations per account (0 = DefaultMaxGuests).
 	MaxGuests int
+	// WireGuard: inner address plan and per-identity peer cap (zero values =
+	// DefaultWgPools / DefaultMaxWgPeersPerAddr).
+	WgPools           WgPools
+	MaxWgPeersPerAddr int
 }
 
 // Open connects to Postgres and applies pending migrations.

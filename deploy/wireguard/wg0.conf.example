@@ -1,0 +1,19 @@
+# WireGuard interface for the fips-exit "wg" service. Install as
+# /etc/wireguard/wg0.conf (root-only, 0600) and `systemctl enable --now wg-quick@wg0`.
+#
+# Peers are NOT listed here: the exit-agent adds and removes them from the
+# backend's peer table (FIPS_AGENT_WG_IF=wg0). The gateway addresses are the
+# first address of each pool (WG_GW4 / WG_GW6 in deploy/.env) and double as the
+# tunnel's resolver (unbound binds them).
+[Interface]
+# wg genkey | tee /etc/wireguard/wg0.key | wg pubkey  — keep the private key here only
+PrivateKey = <output of wg genkey>
+ListenPort = 51820
+Address = 10.64.0.1/16, fc10:f1b5:ea17::1/64
+# 1280 = the fips TUN MTU; WireGuard adds 80 bytes over IPv6, so inner packets
+# above 1200 are fragmented at the outer layer (the rendered MSS clamp keeps TCP
+# under that). See docs/wireguard.md.
+MTU = 1280
+# The pools are on-link addresses above; no per-peer routes are needed and the
+# tunnel must never touch the host's routing table.
+Table = off

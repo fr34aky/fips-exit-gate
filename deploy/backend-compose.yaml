@@ -72,6 +72,11 @@ services:
       EXPIRY_SWEEP_S: ${EXPIRY_SWEEP_S:-60}
       AUTHZ_ALLOW_MASS_REVOKE: ${AUTHZ_ALLOW_MASS_REVOKE:-0}
       MAX_GUESTS_PER_ACCOUNT: ${MAX_GUESTS_PER_ACCOUNT:-5}
+      WG_POOL4: ${WG_POOL4:-10.64.0.0/16}
+      WG_POOL6: ${WG_POOL6:-fc10:f1b5:ea17::/64}
+      WG_PORT: ${WG_PORT:-51820}
+      WG_MTU: ${WG_MTU:-1280}
+      WG_MAX_PEERS_PER_ADDR: ${WG_MAX_PEERS_PER_ADDR:-5}
       # Payments. PAYMENT_RAIL selects the rail: btcpay | phoenixd | empty.
       PAYMENT_RAIL: ${PAYMENT_RAIL:-}
       # BTCPay (PAYMENT_RAIL=btcpay). Empty BTCPAY_URL also disables it.

@@ -30,6 +30,8 @@ type agentMetrics struct {
 	usageCollected  *metrics.Gauge   // unix time of the last successful counter read
 	usageBytes      *metrics.Counter // bytes collected from the acct counters (all services)
 	collectErrors   *metrics.Counter
+	wgPeers         *metrics.Gauge
+	wgErrors        *metrics.Counter
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -51,6 +53,8 @@ func newAgentMetrics() *agentMetrics {
 		usageCollected:  r.Gauge("fipsexit_agent_usage_last_collect_seconds", "Unix time of the last successful read of the acct counters"),
 		usageBytes:      r.Counter("fipsexit_agent_usage_bytes_total", "Bytes collected from the acct counters since start (all services)"),
 		collectErrors:   r.Counter("fipsexit_agent_usage_collect_errors_total", "Failed reads of the acct counters"),
+		wgPeers:         r.Gauge("fipsexit_agent_wg_peers", "WireGuard peers configured on the node (0 when the service is off)"),
+		wgErrors:        r.Counter("fipsexit_agent_wg_errors_total", "WireGuard peer operations that failed (a rejected key or allowed-ip, or wg unavailable)"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -128,6 +132,18 @@ func (m *agentMetrics) fullSync() {
 		return
 	}
 	m.fullSyncs.Inc()
+}
+func (m *agentMetrics) wgErr(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.wgErrors.Add(float64(n))
+}
+func (m *agentMetrics) setWgPeers(n int) {
+	if m == nil {
+		return
+	}
+	m.wgPeers.Set(float64(n))
 }
 func (m *agentMetrics) setAuthorized(n int) {
 	if m == nil {

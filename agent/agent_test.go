@@ -117,6 +117,9 @@ func (b *fakeBackend) postUsage(_ context.Context, r usageReport) (usageAck, err
 func (b *fakeBackend) heartbeat(context.Context, heartbeatRequest) (heartbeatResponse, error) {
 	return heartbeatResponse{}, nil
 }
+func (b *fakeBackend) getWgPeers(context.Context, string) (wgPeersResponse, error) {
+	return wgPeersResponse{}, errUnchanged
+}
 
 func mkAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
 
@@ -343,6 +346,9 @@ func (b *recordingBackend) getAuthz(ctx context.Context, rev int64, _ int, full 
 }
 func (b *recordingBackend) postUsage(context.Context, usageReport) (usageAck, error) {
 	return usageAck{}, nil
+}
+func (b *recordingBackend) getWgPeers(context.Context, string) (wgPeersResponse, error) {
+	return wgPeersResponse{}, errUnchanged
 }
 func (b *recordingBackend) heartbeat(_ context.Context, req heartbeatRequest) (heartbeatResponse, error) {
 	b.mu.Lock()

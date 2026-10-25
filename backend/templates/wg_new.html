@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WireGuard device · fips-exit</title>{{template "styles" .}}</head><body><main>
+<h1>Your WireGuard device</h1>
+<div class="banner warn">
+  <span class="step">Shown once</span>
+  <p style="margin:.3rem 0 0">{{if .OwnKey}}This configuration uses the public key you supplied; fill in your own private key where marked.{{else}}The private key below is <strong>not stored</strong> anywhere. Import it now (scan the QR with the WireGuard app, or download the file). If you lose it, delete this device on your dashboard and create a new one.{{end}}</p>
+</div>
+<p class="muted">Device <span class="mono">{{.Peer.Npub}}</span>{{if .Peer.Label}} · {{.Peer.Label}}{{end}} · tunnel addresses
+<span class="mono">{{.Peer.IP4}}</span>, <span class="mono">{{.Peer.IP6}}</span></p>
+
+{{range .Configs}}
+<div class="card">
+  <h2 style="margin-top:0">Exit: {{.Node}}</h2>
+  {{if .QR}}<p><img src="{{.QR}}" alt="WireGuard configuration QR code" style="max-width:320px;width:100%"></p>{{end}}
+  <pre class="mono" style="white-space:pre-wrap;word-break:break-all;background:var(--card,#111);padding:.8rem;border-radius:6px">{{.Config}}</pre>
+  <a href="{{.Data}}" download="fips-exit-{{.Node}}.conf"><button>Download .conf</button></a>
+</div>
+{{end}}
+
+<h2>How it works</h2>
+<ul class="muted" style="padding-left:1.2rem">
+  <li>Activate the tunnel on the device and <em>all</em> its Internet traffic goes through the exit — IPv4, IPv6, UDP, every app. fips itself (<span class="mono">.fips</span> sites, this portal) stays direct.</li>
+  <li>The tunnel only works while this identity has an active package; otherwise the handshake is simply dropped (the app shows no recent handshake). Top up here, over fips, and it connects on its next retry.</li>
+  <li>Traffic is metered per fips identity like the proxy services, including the tunnel's own overhead (a few percent). One configuration per device.</li>
+</ul>
+<div class="pagenav"><a href="/dashboard">Back to my account</a></div>
+</main></body></html>

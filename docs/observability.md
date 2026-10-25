@@ -69,6 +69,8 @@ way to a structured pipeline.
 | `fipsexit_agent_usage_last_collect_seconds` | gauge | Unix time of the last successful read of the `acct` counters. The stall alert watches this (idle customers are not a stall). |
 | `fipsexit_agent_usage_bytes_total` | counter | Bytes collected from the counters since start, all services. |
 | `fipsexit_agent_usage_collect_errors_total` | counter | Failed counter reads (table missing, `nft` failing). |
+| `fipsexit_agent_wg_peers` | gauge | WireGuard peers configured on the node (0 when the service is off). |
+| `fipsexit_agent_wg_errors_total` | counter | WireGuard peer operations that failed (rejected key/allowed-ip, or `wg` unavailable). |
 
 **Captive** (`fipsexit_captive_`)
 

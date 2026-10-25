@@ -119,6 +119,25 @@ The backend additionally recomputes the authorized set on a timer
 (`EXPIRY_SWEEP_S`, default 60 s), so a time pass that lapses while its account
 is idle is revoked without waiting for an unrelated event.
 
+### `GET /v1/nodes/{node_id}/wg?etag={x}` (WireGuard nodes, every 15 s)
+
+The WireGuard peer table the node must configure on its interface. `204` when
+unchanged for the given etag, otherwise:
+
+```json
+{ "etag": "9f2c…", "peers": [ { "pubkey": "base64", "addr": "fd10:…", "ip4": "10.64.0.5/32", "ip6": "fc10:f1b5:ea17::5/128" } ] }
+```
+
+Every issued peer is listed regardless of authorization: the nftables gate on
+the UDP port is the enforcement, so a freshly paid peer works on its next
+handshake retry. The agent diffs against `wg show <if> dump` and applies
+`wg set` (one batch), and also reconciles on a timer.
+
+The heartbeat request carries `wg_pubkey` / `wg_endpoint` when the node runs
+WireGuard (the portal renders client configs from them), and the heartbeat
+response's `config` gains `"wg": {"port", "pool4", "pool6"}` so the node can
+warn when its `deploy/.env` disagrees with the backend's address plan.
+
 ## Failure semantics
 
 - **Backend unreachable:** agent keeps the last-known authorized set
