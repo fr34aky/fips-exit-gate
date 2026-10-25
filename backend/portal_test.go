@@ -115,7 +115,7 @@ func TestPortalLoginAndWhitelist(t *testing.T) {
 	c := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return nil }}
 
 	ownerPriv, ownerNpub, ownerAddr := newTestKey(t)
-	_, guestNpub, guestAddr := newTestKey(t)
+	guestPriv, guestNpub, guestAddr := newTestKey(t)
 
 	// 1. Get a challenge.
 	resp, err := c.Get(srv.URL + "/auth/challenge")
@@ -158,20 +158,113 @@ func TestPortalLoginAndWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 5. Add a guest via the portal form.
+	// 5. Invite a guest via the portal form.
 	resp, err = c.PostForm(srv.URL+"/whitelist/add", url.Values{"guest_npub": {guestNpub}, "label": {"laptop"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 
-	// 6. Both owner and guest addresses are now authorized.
+	// 6. The owner is authorized; the guest is NOT until they accept (consent).
 	full, _, err := st.FullSet(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !hasAddr(full, ownerAddr) || hasAddr(full, guestAddr) {
+		t.Fatalf("expected owner authorized and guest pending, got %v", full)
+	}
+	resp, _ = c.Get(srv.URL + "/dashboard")
+	if page := readAll(resp); !strings.Contains(page, "awaiting acceptance") {
+		t.Fatal("owner dashboard does not show the invitation as pending")
+	}
+
+	// 7. The guest signs in with their own key, sees the invitation, accepts.
+	gjar, _ := cookiejar.New(nil)
+	gc := &http.Client{Jar: gjar, CheckRedirect: func(*http.Request, []*http.Request) error { return nil }}
+	resp, _ = gc.Get(srv.URL + "/auth/challenge")
+	json.NewDecoder(resp.Body).Decode(&ch)
+	resp.Body.Close()
+	ev = signAuthEvent(t, guestPriv, ch.Challenge)
+	body, _ = json.Marshal(map[string]any{"event": ev})
+	resp, err = gc.Post(srv.URL+"/auth/verify", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	resp, _ = gc.Get(srv.URL + "/dashboard")
+	if page := readAll(resp); !strings.Contains(page, "invited you to share their package") || !strings.Contains(page, ownerNpub) {
+		t.Fatal("guest dashboard does not show the invitation")
+	}
+	resp, err = gc.PostForm(srv.URL+"/whitelist/accept", url.Values{"host_npub": {ownerNpub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	full, _, _ = st.FullSet(ctx)
 	if !hasAddr(full, ownerAddr) || !hasAddr(full, guestAddr) {
-		t.Fatalf("expected owner+guest authorized, got %v", full)
+		t.Fatalf("expected owner+guest authorized after accept, got %v", full)
+	}
+	resp, _ = gc.Get(srv.URL + "/dashboard")
+	if page := readAll(resp); !strings.Contains(page, "Sharing someone else") {
+		t.Fatal("guest dashboard does not say it is attached to the host's account")
+	}
+
+	// 8. Admin inspection shows the guest attached to the host.
+	req, _ := http.NewRequest("GET", srv.URL+"/admin/accounts/"+guestNpub, nil)
+	req.Header.Set("Authorization", "Bearer admintok")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page := readAll(resp); resp.StatusCode != 200 || !strings.Contains(page, `"attached_to":"`+ownerNpub+`"`) {
+		t.Fatalf("admin inspect: status %d body %s", resp.StatusCode, page)
+	}
+}
+
+// Inviting the very device you are browsing from (request source == invited
+// npub's address) is accepted on the spot: possession of the address is the
+// consent. Any other source leaves the invitation pending.
+func TestInviteFromOwnDeviceIsAcceptedImmediately(t *testing.T) {
+	st := testStoreMain(t)
+	ctx := context.Background()
+	p := testPortal(t, st, true)
+
+	_, ownerNpub, _ := newTestKey(t)
+	_, devNpub, devAddr := newTestKey(t)
+	_, otherNpub, otherAddr := newTestKey(t)
+	if err := st.CreditVolume(ctx, ownerNpub, 1_000_000, 30); err != nil {
+		t.Fatal(err)
+	}
+	// Session cookie for the owner.
+	rec := httptest.NewRecorder()
+	p.setSession(rec, ownerNpub)
+	cookie := rec.Result().Cookies()[0]
+
+	post := func(guest string, from netip.Addr) *httptest.ResponseRecorder {
+		form := url.Values{"guest_npub": {guest}}
+		req := httptest.NewRequest("POST", "/whitelist/add", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "[" + from.String() + "]:40000"
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		p.whitelistAdd(rec, req)
+		return rec
+	}
+	// From the invited device itself: active immediately.
+	if rec := post(devNpub, devAddr); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d", rec.Code)
+	}
+	full, _, _ := st.FullSet(ctx)
+	if !hasAddr(full, devAddr) {
+		t.Fatal("device invited from itself was not activated immediately")
+	}
+	// From a different source: stays pending.
+	if rec := post(otherNpub, devAddr); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d", rec.Code)
+	}
+	full, _, _ = st.FullSet(ctx)
+	if hasAddr(full, otherAddr) {
+		t.Fatal("invitation from another device was activated without consent")
 	}
 }
 

@@ -47,6 +47,8 @@ public one.
 | `fipsexit_agent_usage_reports_sent_total` | counter | Usage reports delivered. |
 | `fipsexit_agent_usage_reports_buffered` | gauge | Reports currently buffered on disk. |
 | `fipsexit_agent_usage_reports_dropped_total` | counter | Reports dropped (buffer full). |
+| `fipsexit_agent_full_syncs_total` | counter | Full (rev=0) reconciles applied. |
+| `fipsexit_agent_mass_revoke_refusals_total` | counter | Full reconciles refused by the mass-revoke guard (the backend's set would have revoked most of the live set). Alert on any increase. |
 
 **Captive** (`fipsexit_captive_`)
 

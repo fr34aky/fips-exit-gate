@@ -158,12 +158,24 @@ func grantEntitlementTx(ctx context.Context, tx pgx.Tx, purchaseID, status strin
 	}
 	// Expiry counts from first grant (Processing), not from a later Settled, so
 	// the buyer isn't shortchanged if confirmation lands days later.
-	if _, err := tx.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO entitlements(account_id, purchase_id, kind, volume_bytes, expires_at)
 		 VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))
 		 ON CONFLICT (purchase_id) DO NOTHING`,
-		accountID, purchaseID, kind, vb, validityDays); err != nil {
+		accountID, purchaseID, kind, vb, validityDays)
+	if err != nil {
 		return err
+	}
+	// Paying for your own package is an unambiguous choice of account: if this
+	// npub's address was attached to someone else's account (accepted guest),
+	// bring it home so the purchase actually authorizes the buyer. Only when
+	// this call actually granted something: a later status transition for the
+	// same purchase (processing -> settled) must not undo a choice the user
+	// made in between.
+	if tag.RowsAffected() > 0 {
+		if err := activateOwnerTx(ctx, tx, accountID); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(ctx,
 		`UPDATE purchases

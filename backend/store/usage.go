@@ -53,12 +53,26 @@ func (s *Store) IngestUsage(ctx context.Context, nodeID string, r ReportInput) (
 			if ok {
 				svcID = meta.id
 			}
-			// Resolve the owning account from the current authorized set.
+			// Resolve the owning account from the current authorized set. If the
+			// address is no longer authorized (the report was buffered through an
+			// outage, or the bytes landed just before an inline revoke), fall back
+			// to the account that most recently held it, so the traffic is still
+			// billed to whoever used it rather than written off.
 			var accountID *string
 			if err := tx.QueryRow(ctx,
 				`SELECT account_id::text FROM authz_current WHERE fips_addr = $1::inet`,
 				smp.Addr.String()).Scan(&accountID); err != nil && err != pgx.ErrNoRows {
 				return err
+			}
+			if accountID == nil {
+				if err := tx.QueryRow(ctx,
+					`SELECT account_id::text FROM authz_revisions
+					 WHERE fips_addr = $1::inet AND account_id IS NOT NULL
+					   AND created_at > now() - interval '7 days'
+					 ORDER BY rev DESC LIMIT 1`,
+					smp.Addr.String()).Scan(&accountID); err != nil && err != pgx.ErrNoRows {
+					return err
+				}
 			}
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO usage_samples(report_id, service_id, fips_addr, account_id, bytes)

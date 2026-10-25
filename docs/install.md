@@ -190,7 +190,7 @@ curl -s -H "$H" $URL/admin/authz            # -> the account's fips address appe
 Within a few seconds the agent mirrors it into the kernel set
 (`sudo nft list set inet fips_exit authorized`). Then, **from a separate fips
 peer** whose npub you credited (not the exit host itself — see
-[Troubleshooting](troubleshooting.md#everything-works-but-the-exit-host-itself-isnt-gated)):
+[Troubleshooting](troubleshooting.md#testing-from-the-exit-host-itself-hangs)):
 
 ```sh
 EXIT=<EXIT_FIPS_ADDR>
@@ -312,6 +312,15 @@ The PAC returns `DIRECT` for `.fips`, the fips ULA range, and localhost, and
 if the exit is down, Internet traffic fails closed rather than leaking around the
 proxy. Hosting the file at a `<npub>.fips` URL lets you push an exit-address
 change to every client at once.
+
+## Whole-device mode (no proxy settings)
+
+To send *everything* on a client through the exit — not just the browser — see
+[Whole-device mode](client-tunnel.md): a small systemd service in
+`deploy/client/` runs `tun2socks` on a TUN, policy-routes all Internet traffic
+into the exit's SOCKS port over fips (failing closed if the tunnel dies), keeps
+fips and the LAN direct, and moves DNS to DNS-over-TLS so names resolve through
+the tunnel. Nothing changes on the exit; gating and billing are identical.
 
 ## Uninstall / teardown
 

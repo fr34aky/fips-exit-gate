@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 // CreateAccount creates (or returns) the account for an npub, plus its owner
 // whitelist entry, then recomputes authz.
 func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error) {
+	npub = normNpub(npub)
 	addr, err := fipsaddr.FromNpub(npub)
 	if err != nil {
 		return Account{}, fmt.Errorf("store: derive address: %w", err)
@@ -36,16 +38,19 @@ func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error)
 		return Account{}, err
 	}
 	// The owner entry is enabled unless this address is ALREADY active elsewhere
-	// (e.g. the npub is a whitelisted guest on another account). The partial
-	// unique index whitelist_active_addr (fips_addr) WHERE enabled allows an
-	// address to be active on at most one account, so a guest logging into their
-	// own account gets a dormant (disabled) owner entry rather than a conflict —
-	// letting them view their account while their traffic stays attributed to
-	// the account where they are currently active.
+	// (the npub ACCEPTED a guest invitation on another account). The partial
+	// unique index whitelist_active_addr (fips_addr) WHERE enabled AND NOT
+	// pending allows an address to be active on at most one account, so such a
+	// guest logging into their own account gets a parked (disabled) owner entry
+	// rather than a conflict — they can view their account while their traffic
+	// stays attributed to the account they chose; buying a package here (or
+	// "use my own account") activates the owner row again. A merely PENDING
+	// invitation elsewhere does not count: nobody can park someone else's owner
+	// row by inviting them.
 	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role, enabled)
 		 VALUES ($1, $2, $3::inet, 'owner',
-		         NOT EXISTS (SELECT 1 FROM whitelist_entries WHERE fips_addr = $3::inet AND enabled))
+		         NOT EXISTS (SELECT 1 FROM whitelist_entries WHERE fips_addr = $3::inet AND enabled AND NOT pending))
 		 ON CONFLICT (account_id, npub) DO NOTHING`,
 		acct.ID, npub, addr.String()); err != nil {
 		return Account{}, err
@@ -58,6 +63,7 @@ func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error)
 
 // GetAccountByNpub loads an account.
 func (s *Store) GetAccountByNpub(ctx context.Context, npub string) (Account, error) {
+	npub = normNpub(npub)
 	var a Account
 	var addr string
 	err := s.pool.QueryRow(ctx,
@@ -73,8 +79,11 @@ func (s *Store) GetAccountByNpub(ctx context.Context, npub string) (Account, err
 	return a, nil
 }
 
-// AddWhitelist adds (or re-enables) a guest npub under an owner's account.
+// AddWhitelist adds (or re-enables) a guest npub under an owner's account,
+// ACCEPTED immediately. This is the operator path (admin API, support): the
+// portal uses InviteGuest, which requires the guest's consent.
 func (s *Store) AddWhitelist(ctx context.Context, ownerNpub, guestNpub, label string) error {
+	guestNpub = normNpub(guestNpub)
 	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
 	if err != nil {
 		return err
@@ -84,9 +93,9 @@ func (s *Store) AddWhitelist(ctx context.Context, ownerNpub, guestNpub, label st
 		return fmt.Errorf("store: derive guest address: %w", err)
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role, label)
-		 VALUES ($1, $2, $3::inet, 'guest', $4)
-		 ON CONFLICT (account_id, npub) DO UPDATE SET enabled = true, label = EXCLUDED.label`,
+		`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role, label, enabled, pending)
+		 VALUES ($1, $2, $3::inet, 'guest', $4, true, false)
+		 ON CONFLICT (account_id, npub) DO UPDATE SET enabled = true, pending = false, label = EXCLUDED.label`,
 		acct.ID, guestNpub, addr.String(), label)
 	if err != nil {
 		if strings.Contains(err.Error(), "whitelist_active_addr") {
@@ -98,15 +107,52 @@ func (s *Store) AddWhitelist(ctx context.Context, ownerNpub, guestNpub, label st
 	return err
 }
 
-// SetWhitelistEnabled toggles a guest entry.
+// SetWhitelistEnabled toggles a guest entry. Re-enabling a guest whose address
+// has meanwhile become active on another account (typically their own) makes
+// the row pending again instead of silently pulling the address back: that
+// move needs the guest's consent. Disabling a still-pending invitation deletes
+// it (nothing to keep), and disabling an accepted guest hands the address back
+// to the guest's own account if they have one, so they are never left with no
+// active row at all.
 func (s *Store) SetWhitelistEnabled(ctx context.Context, ownerNpub, guestNpub string, enabled bool) error {
+	guestNpub = normNpub(guestNpub)
 	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
 	if err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE whitelist_entries SET enabled = $3 WHERE account_id = $1 AND npub = $2`,
-		acct.ID, guestNpub, enabled); err != nil {
+	if err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if !enabled {
+			tag, err := tx.Exec(ctx,
+				`DELETE FROM whitelist_entries WHERE account_id = $1 AND npub = $2 AND role = 'guest' AND pending`,
+				acct.ID, guestNpub)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() > 0 {
+				return nil // withdrawn invitation; nothing was active
+			}
+		}
+		var addr string
+		err := tx.QueryRow(ctx,
+			`UPDATE whitelist_entries w SET enabled = $3,
+			   pending = CASE WHEN $3 AND w.role = 'guest' AND NOT w.enabled AND EXISTS (
+			                SELECT 1 FROM whitelist_entries o
+			                WHERE o.fips_addr = w.fips_addr AND o.id <> w.id AND o.enabled AND NOT o.pending)
+			             THEN true ELSE w.pending END
+			 WHERE account_id = $1 AND npub = $2
+			 RETURNING host(fips_addr)`,
+			acct.ID, guestNpub, enabled).Scan(&addr)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return reactivateOwnerIfOrphanTx(ctx, tx, addr)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)
@@ -121,9 +167,14 @@ func (s *Store) CreditVolume(ctx context.Context, npub string, volumeBytes int64
 		return err
 	}
 	expires := time.Now().Add(time.Duration(validityDays) * 24 * time.Hour)
-	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO entitlements(account_id, kind, volume_bytes, expires_at)
-		 VALUES ($1, 'volume', $2, $3)`, acct.ID, volumeBytes, expires); err != nil {
+	if err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO entitlements(account_id, kind, volume_bytes, expires_at)
+			 VALUES ($1, 'volume', $2, $3)`, acct.ID, volumeBytes, expires); err != nil {
+			return err
+		}
+		return activateOwnerTx(ctx, tx, acct.ID)
+	}); err != nil {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)
@@ -137,9 +188,14 @@ func (s *Store) CreditTime(ctx context.Context, npub string, validityDays int) e
 		return err
 	}
 	expires := time.Now().Add(time.Duration(validityDays) * 24 * time.Hour)
-	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO entitlements(account_id, kind, expires_at) VALUES ($1, 'time', $2)`,
-		acct.ID, expires); err != nil {
+	if err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO entitlements(account_id, kind, expires_at) VALUES ($1, 'time', $2)`,
+			acct.ID, expires); err != nil {
+			return err
+		}
+		return activateOwnerTx(ctx, tx, acct.ID)
+	}); err != nil {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)

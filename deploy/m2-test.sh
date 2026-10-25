@@ -54,7 +54,8 @@ hr "3. authorized set after sync — expect the agent ADDED $CLIENT"
 $NFT list set "$TABLE" authorized
 
 hr "4. wait one usage cycle, then read usage the agent reported"
-echo "(uses the residual acct counter from M1 — no new traffic needed)"
+echo "(uses the residual acct counter from M1 — no new traffic needed, unless the agent"
+echo " recovered a corrupt runtime.json, in which case the first window only primes baselines)"
 sleep 7
 echo "--- acct set (source of truth) ---"; $NFT list set "$TABLE" acct
 echo "--- /admin/usage (what the agent reported to the backend) ---"

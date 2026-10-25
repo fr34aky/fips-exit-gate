@@ -20,6 +20,33 @@
   <a href="/packages"><button class="btn-lg">Buy data</button></a>
 </div>{{end}}
 
+{{if .S.AttachedTo}}<div class="banner warn">
+  <span class="step">Sharing someone else's package</span>
+  <p style="margin:.3rem 0 .6rem">Your identity is currently attached to the account of
+  <span class="mono">{{.S.AttachedTo}}</span>: your traffic draws on <em>their</em> package, and packages you
+  buy here stay unused until you switch back.</p>
+  <form method="post" action="/whitelist/use-own"><button class="ghost">Use my own account instead</button></form>
+</div>{{else if .OwnerParked}}<div class="banner warn">
+  <span class="step">Your identity is not active on any account</span>
+  <p style="margin:.3rem 0 .6rem">It was attached elsewhere and that attachment ended. Re-activate it here so your
+  own packages apply.</p>
+  <form method="post" action="/whitelist/use-own"><button class="ghost">Use my own account</button></form>
+</div>{{end}}
+
+{{if .S.Invites}}<div class="banner">
+  <span class="step">Invitations</span>
+  {{range .S.Invites}}<div class="row" style="justify-content:space-between;align-items:center;margin-top:.4rem">
+    <div><span class="mono">{{.HostNpub}}</span> invited you to share their package{{if .Label}} as “{{.Label}}”{{end}}.
+      <div class="muted" style="font-size:.85em">Accepting attaches your identity to their account; you can switch back any time.</div></div>
+    <div class="row">
+      <form method="post" action="/whitelist/accept"><input type="hidden" name="host_npub" value="{{.HostNpub}}"><button>Accept</button></form>
+      <form method="post" action="/whitelist/decline"><input type="hidden" name="host_npub" value="{{.HostNpub}}"><button class="ghost">Decline</button></form>
+    </div>
+  </div>{{end}}
+</div>{{end}}
+
+{{if .Msg}}<div class="banner good"><p style="margin:0">{{.Msg}}</p></div>{{end}}
+
 <p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
 
 <h2>Your data</h2>
@@ -86,17 +113,25 @@ confirmation for on-chain Bitcoin.</p>
 {{end}}
 
 <h2>Shared access</h2>
-<p class="muted">Add your other devices (or people you trust) by their npub so they draw on this same
-package. You can disable any of them at any time.</p>
+<p class="muted">Invite your other devices (or people you trust) by their <strong>fips npub</strong> so they draw
+on this same package. An invitation takes effect once that identity accepts it from its own dashboard
+(inviting the device you're using right now is accepted immediately). You can disable anyone at any time.</p>
+{{if .ThisDevice}}<div class="card" style="border-color:var(--warn,#c90)">
+  <strong>This device isn't on your account.</strong>
+  <p class="muted" style="margin:.3rem 0 0">You're visiting from fips address <span class="mono">{{.ThisDevice}}</span>,
+  which none of the identities below map to — traffic from it won't be covered by your package. If it's yours,
+  paste its fips npub (<span class="mono">fipsctl show identity-cache</span>) into the form below; since you're
+  on that device now, it's added instantly.</p>
+</div>{{end}}
 <table><thead><tr><th>Identity</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
 {{range .S.Whitelist}}<tr>
   <td><div>{{if .Label}}{{.Label}}{{end}}</div><div class="mono muted">{{.Npub}}</div></td>
   <td>{{.Role}}</td>
-  <td>{{if .Enabled}}<span class="pill on">enabled</span>{{else}}<span class="pill off">disabled</span>{{end}}</td>
+  <td>{{if and .Pending .Enabled}}<span class="pill">invited · awaiting acceptance</span>{{else if .Enabled}}<span class="pill on">enabled</span>{{else}}<span class="pill off">{{if eq .Role "owner"}}parked{{else}}disabled{{end}}</span>{{end}}</td>
   <td>{{if ne .Role "owner"}}<form method="post" action="/whitelist/toggle">
       <input type="hidden" name="guest_npub" value="{{.Npub}}">
       <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">
-      <button class="ghost">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>{{end}}</td>
+      <button class="ghost">{{if .Enabled}}{{if .Pending}}Withdraw{{else}}Disable{{end}}{{else}}Enable{{end}}</button></form>{{end}}</td>
 </tr>{{end}}
 </tbody></table>
 
@@ -106,7 +141,7 @@ package. You can disable any of them at any time.</p>
   <form method="post" action="/whitelist/add">
     <p><input type="text" name="guest_npub" placeholder="npub1…" required></p>
     <p><input type="text" name="label" placeholder="label (optional), e.g. my laptop"></p>
-    <p><input type="submit" value="Add to my account"></p>
+    <p><input type="submit" value="Invite to my account"></p>
   </form>
 </div>
 

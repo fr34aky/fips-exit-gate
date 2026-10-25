@@ -57,8 +57,13 @@ func TestVerifyRejectsBadSig(t *testing.T) {
 	priv, _ := btcec.NewPrivateKey()
 	e := &Event{Kind: 1, CreatedAt: 1, Content: "x"}
 	signEvent(t, priv, e)
-	// Flip a byte in the signature.
-	e.Sig = e.Sig[:10] + "00" + e.Sig[12:]
+	// Corrupt a byte in the signature (pick a value that is guaranteed to differ
+	// from the original so the test can't pass vacuously).
+	repl := "00"
+	if e.Sig[10:12] == "00" {
+		repl = "ff"
+	}
+	e.Sig = e.Sig[:10] + repl + e.Sig[12:]
 	if _, err := Verify(e); err == nil {
 		t.Fatal("verify accepted bad signature")
 	}
