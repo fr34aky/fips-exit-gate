@@ -41,7 +41,8 @@ type Agent struct {
 
 	// fullSyncEvery bounds how long the kernel set may silently drift from the
 	// backend before runSync forces a full reconcile even at an unchanged
-	// revision. heartbeatEvery and longPollWait pace the other two loops. All
+	// revision (0 = never; the startup and heartbeat-triggered reconciles still
+	// happen). heartbeatEvery and longPollWait pace the other two loops. All
 	// are set before Run and read-only afterwards.
 	fullSyncEvery  time.Duration
 	heartbeatEvery time.Duration
@@ -57,6 +58,7 @@ type Agent struct {
 	allowMassRevoke bool
 
 	mu                   sync.Mutex
+	startedAt            time.Time // when Run began (fail-closed startup grace)
 	cfg                  agentConfig
 	services             map[uint16]string // port -> service key
 	failClosedAfterGrace bool
@@ -151,14 +153,31 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // initLastAuthzOK seeds the grace clock from persisted state, so an outage
 // that spans restarts still fails closed on time; a first run starts it now.
+// graceCheck additionally requires startupGrace of THIS process's uptime
+// before acting on a stale persisted clock, so planned downtime of the agent
+// or host (which says nothing about the backend) followed by one transient
+// startup failure does not flush every paying user.
 func (a *Agent) initLastAuthzOK() {
 	last := a.store.snapshotRuntime().LastAuthzOK
+	now := a.now()
 	if last.IsZero() {
-		last = a.now()
+		last = now
 	}
 	a.mu.Lock()
 	a.lastAuthzOK = last
+	a.startedAt = now
 	a.mu.Unlock()
+}
+
+// startupGrace is how long after start the backend must have been failing
+// before a stale persisted clock may trigger fail-closed: 10 minutes, or half
+// the grace window if that is shorter.
+func (a *Agent) startupGrace() time.Duration {
+	g := 10 * time.Minute
+	if half := time.Duration(a.cfg.GraceMinutes) * time.Minute / 2; half > 0 && half < g {
+		g = half
+	}
+	return g
 }
 
 // --- authz sync -------------------------------------------------------------
@@ -183,10 +202,10 @@ func (a *Agent) runSync(ctx context.Context) {
 		if a.takeResync() {
 			forceFull = true
 		}
-		if !forceFull && a.now().Sub(lastFull) >= a.fullSyncEvery {
+		if !forceFull && a.fullSyncEvery > 0 && a.now().Sub(lastFull) >= a.fullSyncEvery {
 			forceFull = true
 		}
-		persisted := a.store.snapshotRuntime().AuthzRev
+		persisted := a.store.authzRev()
 		rev := persisted
 		if forceFull {
 			rev = 0
@@ -211,8 +230,13 @@ func (a *Agent) runSync(ctx context.Context) {
 		default:
 			if err := a.applyAuthz(resp); err != nil {
 				var mass *massRevokeError
-				if errors.As(err, &mass) {
+				var regress *revRegressionError
+				switch {
+				case errors.As(err, &mass):
+					// The backend answered, so this is a deliberate hold, not an
+					// outage: keep the grace clock and metrics truthful.
 					a.metrics.massRevokeRefused()
+					a.markAuthzOK()
 					log.Printf("agent: REFUSING full reconcile: %v (backend force=false, FIPS_AGENT_ALLOW_MASS_REVOKE unset)", err)
 					if forceFull && persisted > 0 {
 						// We have a cursor: let the authoritative delta log, which
@@ -221,10 +245,21 @@ func (a *Agent) runSync(ctx context.Context) {
 						// retries later and passes once delta and full agree.
 						forceFull = false
 						lastFull = a.now()
-						a.markAuthzOK()
 						backoff.reset()
 						continue
 					}
+					// Unforced full (compaction, or a backend with no delta log) or
+					// no cursor: nothing safer to fall back to; hold and retry.
+					sleep(ctx, backoff.next())
+					continue
+				case errors.As(err, &regress):
+					// The backend's revision went backwards (restored/fresh
+					// database): our cursor is meaningless there. Don't move it
+					// onto the new timeline silently; ask for a full set, which the
+					// mass-revoke guard then judges.
+					a.markAuthzOK()
+					log.Printf("agent: %v; forcing a full reconcile", err)
+					forceFull = true
 					sleep(ctx, backoff.next())
 					continue
 				}
@@ -254,6 +289,17 @@ type massRevokeError struct {
 
 func (e *massRevokeError) Error() string {
 	return fmt.Sprintf("full set would revoke %d of %d live addresses", e.del, e.current)
+}
+
+// revRegressionError is returned by applyAuthz for a delta whose revision is
+// below the persisted cursor: the backend's revision timeline was reset
+// (database restore, pointed at a fresh backend). Nothing has been applied.
+type revRegressionError struct {
+	got, cursor int64
+}
+
+func (e *revRegressionError) Error() string {
+	return fmt.Sprintf("backend revision %d is below our cursor %d (backend reset?)", e.got, e.cursor)
 }
 
 // presentOnly filters del down to addresses actually in the live set. nft
@@ -316,6 +362,9 @@ func (a *Agent) applyAuthz(resp authzResponse) error {
 			return &massRevokeError{del: len(del), current: len(current)}
 		}
 	} else {
+		if cursor := a.store.authzRev(); resp.Rev < cursor {
+			return &revRegressionError{got: resp.Rev, cursor: cursor}
+		}
 		for _, m := range resp.Add {
 			add = append(add, m.Addr)
 		}
@@ -337,15 +386,25 @@ func (a *Agent) isMassRevoke(del, current int) bool {
 	return del > a.massRevokeMin && del*2 > current
 }
 
+// persistAuthzOKEvery throttles how often the grace clock is written to disk:
+// it only needs minute resolution, and every idle 204 long-poll would otherwise
+// re-serialize and fsync the whole runtime file (buffered usage included).
+const persistAuthzOKEvery = time.Minute
+
 func (a *Agent) markAuthzOK() {
 	now := a.now()
 	a.mu.Lock()
 	a.lastAuthzOK = now
 	a.mu.Unlock()
-	if err := a.store.withRuntime(func(rt *runtime) { rt.LastAuthzOK = now }); err != nil {
-		log.Printf("agent: persist last_authz_ok: %v", err)
+	a.store.mu.Lock()
+	stale := now.Sub(a.store.rt.LastAuthzOK) >= persistAuthzOKEvery
+	a.store.mu.Unlock()
+	if stale {
+		if err := a.store.withRuntime(func(rt *runtime) { rt.LastAuthzOK = now }); err != nil {
+			log.Printf("agent: persist last_authz_ok: %v", err)
+		}
 	}
-	a.metrics.syncOK(a.store.snapshotRuntime().AuthzRev, now)
+	a.metrics.syncOK(a.store.authzRev(), now)
 }
 
 // graceCheck optionally fails closed (flushes the authorized set) once the
@@ -354,10 +413,15 @@ func (a *Agent) graceCheck() {
 	a.metrics.outage()
 	a.mu.Lock()
 	grace := time.Duration(a.cfg.GraceMinutes) * time.Minute
-	over := a.now().Sub(a.lastAuthzOK) > grace
+	now := a.now()
+	over := now.Sub(a.lastAuthzOK) > grace
+	// A persisted clock older than grace may just mean WE were down (planned
+	// maintenance); only act on it once this process has itself seen the
+	// backend fail for startupGrace.
+	settled := a.startedAt.IsZero() || now.Sub(a.startedAt) >= a.startupGrace()
 	failClosed := a.failClosedAfterGrace
 	a.mu.Unlock()
-	if !over || !failClosed {
+	if !over || !failClosed || !settled {
 		return // fail-open: keep last-known set so paying users are unaffected
 	}
 	current, err := a.fw.ListAuthorized()

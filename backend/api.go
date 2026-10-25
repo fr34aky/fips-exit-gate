@@ -78,6 +78,11 @@ func (h *handlers) authz(w http.ResponseWriter, r *http.Request) {
 		poll = 5 * time.Second
 	}
 	for {
+		// Take the wake-up channel BEFORE reading the revision: a NOTIFY that
+		// lands between the read and the select would otherwise close a
+		// channel we never obtained, and the poll would sleep a full
+		// fallback interval instead of waking at once.
+		wake := h.revs.wait()
 		cur, err := h.store.CurrentRev(ctx)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
@@ -100,7 +105,7 @@ func (h *handlers) authz(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-h.revs.wait():
+		case <-wake:
 		case <-time.After(poll):
 		}
 	}

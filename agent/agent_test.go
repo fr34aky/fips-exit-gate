@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -709,14 +710,97 @@ func TestLastAuthzOKPersistsAcrossRestart(t *testing.T) {
 	_ = fw.ApplyAuthorized([]netip.Addr{mkAddr("fd00::1")}, nil)
 	b := newAgent(st2, &fakeBackend{}, fw, "test", "enroll", true, 100)
 	b.cfg.GraceMinutes = 240
-	b.nowFn = func() time.Time { return base.Add(5 * time.Hour) }
+	restart := base.Add(5 * time.Hour)
+	b.nowFn = func() time.Time { return restart }
 	b.initLastAuthzOK()
 	if got := b.lastAuthzOK; !got.Equal(base) {
 		t.Fatalf("lastAuthzOK after restart = %v, want persisted %v", got, base)
 	}
+	// Right after start a stale persisted clock alone must NOT flush: the agent
+	// (or the whole host) may simply have been down for maintenance.
+	b.graceCheck()
+	if !fw.has(mkAddr("fd00::1")) {
+		t.Fatal("flushed on the first failure after a restart (planned downtime treated as outage)")
+	}
+	// Once this process has itself seen the backend fail for the startup
+	// grace, the persisted clock counts and it fails closed.
+	b.nowFn = func() time.Time { return restart.Add(b.startupGrace() + time.Second) }
 	b.graceCheck()
 	if fw.has(mkAddr("fd00::1")) {
-		t.Fatal("did not fail closed although the persisted grace window had passed")
+		t.Fatal("did not fail closed although the persisted grace window had passed and the startup grace elapsed")
+	}
+}
+
+// A delta whose revision is below the persisted cursor means the backend's
+// timeline was reset; it must not be applied or move the cursor.
+func TestDeltaBelowCursorIsRejected(t *testing.T) {
+	fw := newFakeFirewall()
+	_ = fw.ApplyAuthorized([]netip.Addr{mkAddr("fd00::1")}, nil)
+	a := newTestAgent(t, &fakeBackend{}, fw)
+	_ = a.store.withRuntime(func(rt *runtime) { rt.AuthzRev = 500 })
+	err := a.applyAuthz(authzResponse{Rev: 3, Add: []authzMember{{Addr: mkAddr("fd00::2"), Account: "x"}}, Del: []netip.Addr{mkAddr("fd00::1")}})
+	var regress *revRegressionError
+	if !errors.As(err, &regress) {
+		t.Fatalf("expected revRegressionError, got %v", err)
+	}
+	if !fw.has(mkAddr("fd00::1")) || fw.has(mkAddr("fd00::2")) {
+		t.Fatal("regressed delta was applied")
+	}
+	if a.store.authzRev() != 500 {
+		t.Fatal("cursor moved backwards")
+	}
+}
+
+// countingBackend answers every authz request with the same full set and
+// counts how many times it was asked, to prove a disabled periodic full sync
+// does not turn the loop into a firehose.
+type countingBackend struct {
+	recordingBackend
+	calls atomic.Int32
+}
+
+func (b *countingBackend) getAuthz(ctx context.Context, rev int64, w int, full bool) (authzResponse, error) {
+	b.calls.Add(1)
+	return b.recordingBackend.getAuthz(ctx, rev, w, full)
+}
+
+func TestFullSyncIntervalZeroDisablesPeriodicFullPulls(t *testing.T) {
+	fw := newFakeFirewall()
+	be := &countingBackend{recordingBackend: recordingBackend{full: authzResponse{Rev: 5, Full: true,
+		Addresses: []authzMember{{Addr: mkAddr("fd00::1"), Account: "a1"}}}}}
+	a := newTestAgent(t, be, fw)
+	a.fullSyncEvery = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.ensureEnrolled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	go a.runSync(ctx)
+	waitFor(t, time.Second, "startup grant", func() bool { return fw.has(mkAddr("fd00::1")) })
+	time.Sleep(300 * time.Millisecond)
+	// One startup full pull, then paced delta long-polls (2 ms each in the
+	// fake) — never a burst of immediate full pulls.
+	if n := be.calls.Load(); n > 200 {
+		t.Fatalf("sync loop made %d requests in 300 ms with fullSyncEvery=0 (firehose)", n)
+	}
+}
+
+// The clean state substituted for a corrupt runtime.json is persisted at once,
+// so a crash before the first collection can't lose the prime flag.
+func TestRecoveredRuntimeStateIsPersisted(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "runtime.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(dir); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := openStore(dir) // "crash" and restart without any collection in between
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st2.snapshotRuntime().PrimeBaselines {
+		t.Fatal("PrimeBaselines lost across a restart right after recovery")
 	}
 }
 

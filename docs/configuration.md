@@ -113,7 +113,7 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_STATE_DIR` | `/var/lib/fips-exit-agent` | Durable state (`identity.json` 0600, `runtime.json`). |
 | `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE` | `0` | `1` = revoke all access if the backend is unreachable past the grace window (default is fail-open: keep the last-known set). |
 | `FIPS_AGENT_USAGE_BUFFER_CAP` | `2880` | Max buffered usage reports during an outage (≈ 24 h at 30 s). |
-| `FIPS_AGENT_FULL_SYNC_S` | `300` | How often to force a full reconcile of the kernel set against the backend (drift backstop). |
+| `FIPS_AGENT_FULL_SYNC_S` | `300` | How often to force a full reconcile of the kernel set against the backend (drift backstop). `0` disables the periodic one (startup and heartbeat-triggered reconciles still run); positive values are floored at 30. |
 | `FIPS_AGENT_HEARTBEAT_S` | `60` | Heartbeat interval. |
 | `FIPS_AGENT_LONGPOLL_S` | `50` | How long the backend may hold an authz long-poll (5–55). |
 | `FIPS_AGENT_MASS_REVOKE_MIN` | `50` | Mass-revoke guard floor: a full reconcile is refused if it would delete more than this many addresses *and* more than half of the live set. |

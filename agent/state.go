@@ -54,17 +54,28 @@ func openStore(dir string) (*store, error) {
 		return nil, fmt.Errorf("state: mkdir %s: %w", dir, err)
 	}
 	s := &store{dir: dir}
-	if err := s.load(); err != nil {
+	recovered, err := s.load()
+	if err != nil {
 		return nil, err
+	}
+	if recovered {
+		// Persist the clean state (with PrimeBaselines) right away: a crash
+		// before the first collection would otherwise come back with no file
+		// at all, no prime flag, and bill every live counter a second time.
+		if err := writeJSONAtomic(filepath.Join(dir, "runtime.json"), s.rt, 0o600); err != nil {
+			return nil, fmt.Errorf("state: persist recovered runtime: %w", err)
+		}
 	}
 	return s, nil
 }
 
-func (s *store) load() error {
+// load reads identity and runtime state; recovered reports that a corrupt
+// runtime file was moved aside and a clean state substituted.
+func (s *store) load() (recovered bool, err error) {
 	if b, err := os.ReadFile(filepath.Join(s.dir, "identity.json")); err == nil {
 		var id identity
 		if err := json.Unmarshal(b, &id); err != nil {
-			return fmt.Errorf("state: parse identity: %w", err)
+			return false, fmt.Errorf("state: parse identity: %w", err)
 		}
 		s.id = &id
 	}
@@ -78,10 +89,11 @@ func (s *store) load() error {
 			// a forced full reconcile (rev 0) and primed baselines.
 			bak := fmt.Sprintf("%s.corrupt-%d", rtPath, time.Now().Unix())
 			if rerr := os.Rename(rtPath, bak); rerr != nil {
-				return fmt.Errorf("state: parse runtime: %w (and could not move it aside: %v)", err, rerr)
+				return false, fmt.Errorf("state: parse runtime: %w (and could not move it aside: %v)", err, rerr)
 			}
 			log.Printf("state: runtime.json unreadable (%v); moved to %s, starting from clean state", err, bak)
 			s.rt = &runtime{Baselines: map[string]uint64{}, PrimeBaselines: true}
+			recovered = true
 		} else {
 			s.rt = &rt
 		}
@@ -92,7 +104,14 @@ func (s *store) load() error {
 	if s.rt.Baselines == nil {
 		s.rt.Baselines = map[string]uint64{}
 	}
-	return nil
+	return recovered, nil
+}
+
+// authzRev returns the persisted cursor without copying the whole runtime.
+func (s *store) authzRev() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rt.AuthzRev
 }
 
 func (s *store) enrolled() bool {

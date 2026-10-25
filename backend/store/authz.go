@@ -113,9 +113,13 @@ func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev i
 func (s *Store) ListenAuthz(ctx context.Context, onChange func()) {
 	backoff := time.Second
 	for ctx.Err() == nil {
+		started := time.Now()
 		err := s.listenOnce(ctx, onChange)
 		if ctx.Err() != nil {
 			return
+		}
+		if time.Since(started) > time.Minute {
+			backoff = time.Second // a healthy session resets the ladder
 		}
 		log.Printf("store: authz listener: %v (reconnecting in %s)", err, backoff)
 		select {
@@ -187,7 +191,21 @@ func (s *Store) FullSet(ctx context.Context) ([]AuthzMember, int64, error) {
 // point. A fingerprint (or, for older agents, size) mismatch at an equal
 // revision means the node's set has drifted out-of-band (e.g. an nftables
 // flush) — the caller uses this to ask the node to force a full reconcile.
+//
+// The fingerprint can only change when the revision changes, so the result is
+// memoized per revision: a fleet heartbeating every minute costs one scan per
+// revision change, not one per heartbeat.
 func (s *Store) AuthzStatus(ctx context.Context) (count int, hash string, rev int64, err error) {
+	if rev, err = s.CurrentRev(ctx); err != nil {
+		return 0, "", 0, err
+	}
+	s.statusMu.Lock()
+	if s.statusCache.rev == rev && s.statusCache.hash != "" {
+		c := s.statusCache
+		s.statusMu.Unlock()
+		return c.count, c.hash, rev, nil
+	}
+	s.statusMu.Unlock()
 	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev); err != nil {
 			return err
@@ -205,7 +223,19 @@ func (s *Store) AuthzStatus(ctx context.Context) (count int, hash string, rev in
 		count, hash = len(addrs), authzhash.Of(addrs)
 		return nil
 	})
+	if err == nil {
+		s.statusMu.Lock()
+		s.statusCache = authzStatus{rev: rev, count: count, hash: hash}
+		s.statusMu.Unlock()
+	}
 	return count, hash, rev, err
+}
+
+// authzStatus is the memoized AuthzStatus result for one revision.
+type authzStatus struct {
+	rev   int64
+	count int
+	hash  string
 }
 
 // DeltaSince returns the net add/del since clientRev by replaying the revision
