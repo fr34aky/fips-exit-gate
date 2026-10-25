@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -34,6 +35,18 @@ func main() {
 	client := newBackendClient(baseURL)
 	fw := newNftFirewall(nftPath, table)
 	a := newAgent(st, client, fw, nodeName, enrollToken, failClosed, bufferCap)
+	// WireGuard whole-device service: mirror the backend's peer table onto
+	// FIPS_AGENT_WG_IF and announce this node's key + endpoint.
+	if wgIf := os.Getenv("FIPS_AGENT_WG_IF"); wgIf != "" {
+		a.wg = newWgTool(getenv("FIPS_AGENT_WG", "wg"), wgIf)
+		a.wgEndpoint = os.Getenv("FIPS_AGENT_WG_ENDPOINT") // e.g. npub1…exit….fips:51820
+		if a.wgEndpoint == "" {
+			log.Fatal("agent: FIPS_AGENT_WG_ENDPOINT is required with FIPS_AGENT_WG_IF (what clients should dial)")
+		}
+		if s := getenvInt("FIPS_AGENT_WG_SYNC_S", 15); s > 0 {
+			a.wgSyncEvery = time.Duration(s) * time.Second
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

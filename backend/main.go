@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -46,10 +47,14 @@ func main() {
 		log.Fatalf("backend: seed packages: %v", err)
 	}
 
+	wg := loadWgSettings()
+	st.WgPools = wg.pools
+	st.MaxWgPeersPerAddr = getenvInt("WG_MAX_PEERS_PER_ADDR", store.DefaultMaxWgPeersPerAddr)
 	h := &handlers{
 		store:          st,
 		usageIntervalS: getenvInt("USAGE_INTERVAL_S", 30),
 		graceMinutes:   getenvInt("GRACE_MINUTES", 240),
+		wg:             wg,
 	}
 	p, err := newPortal(st,
 		secretEnv("SESSION_SECRET"),
@@ -70,6 +75,7 @@ func main() {
 	p.autoSettle = os.Getenv("PORTAL_DEV_AUTOSETTLE") == "1"
 	p.publicURL = strings.TrimRight(getenv("PORTAL_PUBLIC_URL", "http://localhost:8080"), "/")
 	p.pacHost = os.Getenv("PORTAL_PAC_HOST") // e.g. npub1…exit….fips; empty = derive from PORTAL_PUBLIC_URL
+	p.wg = wg
 
 	m := newAppMetrics(st)
 
@@ -161,6 +167,7 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	mux.Handle("GET /v1/nodes/{id}/authz", requireNode(st, h.authz))
 	mux.Handle("POST /v1/nodes/{id}/usage", requireNode(st, h.usage))
 	mux.Handle("POST /v1/nodes/{id}/heartbeat", requireNode(st, h.heartbeat))
+	mux.Handle("GET /v1/nodes/{id}/wg", requireNode(st, h.wgPeers))
 
 	// Admin API (static bearer token).
 	mux.Handle("POST /admin/enroll-token", requireAdmin(adminToken, h.adminEnrollToken))
@@ -187,6 +194,37 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	p.routes(mux)
 
 	return mux
+}
+
+// loadWgSettings reads the WireGuard address plan from the environment. The
+// exits render their nftables policy from the same values (deploy/.env), so
+// a mismatch is a deployment error the agent warns about via the heartbeat.
+func loadWgSettings() wgSettings {
+	pools := store.DefaultWgPools
+	if v := os.Getenv("WG_POOL4"); v != "" {
+		pools.Pool4 = mustPrefix("WG_POOL4", v)
+	}
+	if v := os.Getenv("WG_POOL6"); v != "" {
+		pools.Pool6 = mustPrefix("WG_POOL6", v)
+	}
+	if pools.Pool4.Bits() > 24 || pools.Pool6.Bits() > 64 {
+		log.Fatalf("backend: WG_POOL4 must be a /24 or larger and WG_POOL6 a /64 or larger")
+	}
+	return wgSettings{
+		port:  getenvInt("WG_PORT", 51820),
+		pools: pools,
+		dns4:  pools.Gateway4(),
+		dns6:  pools.Gateway6(),
+		mtu:   getenvInt("WG_MTU", 1280),
+	}
+}
+
+func mustPrefix(name, v string) netip.Prefix {
+	p, err := netip.ParsePrefix(v)
+	if err != nil {
+		log.Fatalf("backend: %s: %v", name, err)
+	}
+	return p.Masked()
 }
 
 // secretEnv returns the named secret, or a random ephemeral one (logged) if

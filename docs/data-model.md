@@ -90,7 +90,17 @@ services (one `@authorized` set); only metering and rates are per-service.
 ## Accounting & nodes
 
 ```
-exit_nodes
+wg_peers                 -- WireGuard devices (one row per client key)
+  id            pk
+  account_id    fk -> accounts           -- the account whose package it draws from
+  npub          text not null            -- whitelist identity it was issued to
+  fips_addr     inet not null            -- derived: the OUTER source that must be authorized
+  pubkey        text unique not null     -- client public key; private keys are never stored
+  idx           integer unique not null  -- inner addresses = pool4 + idx, pool6::idx
+  label, created_by, created_at
+  -- the agent mirrors ALL rows onto wg0 (etag-polled); the UDP port gate decides
+
+exit_nodes                               -- + wg_pubkey, wg_endpoint, wg_seen_at (announced by heartbeat)
   id            pk
   name          text
   node_pubkey   text                      -- Ed25519, from enrollment

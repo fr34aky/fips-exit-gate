@@ -20,6 +20,8 @@
   <a href="/packages"><button class="btn-lg">Buy data</button></a>
 </div>{{end}}
 
+{{if .Msg}}<div class="banner good"><p style="margin:0">{{.Msg}}</p></div>{{end}}
+
 <p class="muted mono">{{.S.Account.Npub}}<br>{{.S.Account.FipsAddr}}</p>
 
 <h2>Your data</h2>
@@ -55,6 +57,35 @@ and send the Internet through the exit — switch profiles by swapping the URL.<
 {{end}}
 <p class="muted">Using the URL (not a downloaded copy) means updates apply automatically. More in the
 <a href="/help">help &amp; FAQ</a>.</p>
+{{end}}
+
+{{if .WgNodes}}
+<h2>WireGuard (whole-device VPN)</h2>
+<p class="muted">Instead of proxy settings, import one WireGuard configuration and <em>everything</em> on the device
+goes through the exit (IPv4, IPv6, UDP, all apps) while <span class="mono">.fips</span> stays direct. One
+configuration per device; it works from the fips identity it is issued to, while that identity's package is active.</p>
+{{if .WgPeers}}
+<table><thead><tr><th>Device</th><th>Identity</th><th>Tunnel address</th><th></th></tr></thead><tbody>
+{{range .WgPeers}}<tr>
+  <td>{{if .Label}}{{.Label}}{{else}}<span class="muted">unnamed</span>{{end}}</td>
+  <td class="mono muted">{{.Npub}}</td>
+  <td class="mono">{{.IP4}}</td>
+  <td><form method="post" action="/wg/delete"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost">Delete</button></form></td>
+</tr>{{end}}
+</tbody></table>
+{{end}}
+<div class="card">
+  <h2 style="margin-top:0">New WireGuard device</h2>
+  <form method="post" action="/wg/new">
+    <p><label>For identity
+      <select name="device_npub">{{range .S.Whitelist}}{{if .Enabled}}<option value="{{.Npub}}">{{if .Label}}{{.Label}} · {{end}}{{.Npub}}</option>{{end}}{{end}}</select></label></p>
+    <p><input type="text" name="label" placeholder="device name (optional), e.g. phone"></p>
+    <details><summary class="muted">I have my own WireGuard key pair</summary>
+      <p><input type="text" name="pubkey" placeholder="your WireGuard PUBLIC key (base64)"></p></details>
+    <p><input type="submit" value="Create configuration"></p>
+  </form>
+  <p class="muted" style="font-size:.85em">Exits offering WireGuard: {{range .WgNodes}}<span class="mono">{{.Name}}</span> {{end}}</p>
+</div>
 {{end}}
 
 {{if .S.Services}}

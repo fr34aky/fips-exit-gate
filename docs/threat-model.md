@@ -37,6 +37,14 @@ the mesh.
 
 ## 2. Exit abuse (outbound)
 
+The WireGuard service applies the same policy in the kernel's forward path
+(`wg_egress` in the rendered ruleset: private/mesh/metadata destinations and
+outbound mail rejected, clients isolated, only DNS/ICMP to the exit itself),
+so a tunnel client has no more reach than a SOCKS client. Its identity model
+is unchanged: the UDP port is gated by fips source address, keys only select
+inner addresses, and a shared configuration is billed to whichever authorized
+node carries it.
+
 - Egress policy: block SMTP (25), and destinations in loopback, RFC 1918,
   link-local, cloud metadata (169.254.169.254 / fd00:ec2::254), and fd00::/8
   (no re-entry into fips; also keeps metering internet-only).

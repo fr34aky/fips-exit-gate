@@ -48,6 +48,14 @@ on the box (not just the proxy) can reach the metadata endpoint:
 nft add rule inet filter output ip daddr 169.254.169.254 drop
 ```
 
+## WireGuard tunnel policy
+
+When the `wg` service is enabled, tunnel clients are subject to the same
+egress policy as Dante, enforced in the forward path (`wg_egress`): see
+[WireGuard](wireguard.md#what-the-ruleset-does-for-tunnel-traffic). The exit
+host itself is closed to tunnel clients except for the resolver on the
+gateway addresses and ICMP.
+
 ## Per-account ceilings
 
 ### Concurrent connections (nftables)

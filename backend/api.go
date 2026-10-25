@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -22,6 +23,30 @@ type handlers struct {
 	store          *store.Store
 	usageIntervalS int
 	graceMinutes   int
+	wg             wgSettings
+}
+
+// wgPeers is the agent's peer sync: GET /v1/nodes/{id}/wg?etag=<x> answers 204
+// when the table is unchanged, else the full peer list with a new etag. The
+// full list (not just authorized peers) is deliberate: the UDP port gate is the
+// enforcement, so a freshly paid peer works on its next handshake retry.
+func (h *handlers) wgPeers(w http.ResponseWriter, r *http.Request) {
+	peers, etag, err := h.store.WgPeerTable(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if etag == r.URL.Query().Get("etag") {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	out := make([]map[string]any, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, map[string]any{
+			"pubkey": p.Pubkey, "addr": p.FipsAddr, "ip4": p.IP4.String() + "/32", "ip6": p.IP6.String() + "/128",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"etag": etag, "peers": out})
 }
 
 // --- agent-facing endpoints -------------------------------------------------
@@ -134,15 +159,24 @@ func (h *handlers) usage(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.PathValue("id")
 	var req struct {
-		Version  string `json:"version"`
-		AuthzRev int64  `json:"authz_rev"`
-		SetSize  int    `json:"set_size"`
+		Version    string `json:"version"`
+		AuthzRev   int64  `json:"authz_rev"`
+		SetSize    int    `json:"set_size"`
+		WgPubkey   string `json:"wg_pubkey,omitempty"`
+		WgEndpoint string `json:"wg_endpoint,omitempty"`
 	}
 	_ = decodeQuiet(r, &req)
 	services, err := h.store.Heartbeat(r.Context(), nodeID, req.Version)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	// A node that runs WireGuard announces its public key and the endpoint
+	// clients should dial; the portal renders configs from these.
+	if req.WgPubkey != "" {
+		if err := h.store.SetNodeWg(r.Context(), nodeID, req.WgPubkey, req.WgEndpoint); err != nil {
+			log.Printf("backend: node %s wg announce rejected: %v", nodeID, err)
+		}
 	}
 	svc := make([]map[string]any, 0, len(services))
 	for _, s := range services {
@@ -162,6 +196,9 @@ func (h *handlers) heartbeat(w http.ResponseWriter, r *http.Request) {
 			"usage_interval_s": h.usageIntervalS,
 			"grace_minutes":    h.graceMinutes,
 			"services":         svc,
+			"wg": map[string]any{
+				"port": h.wg.port, "pool4": h.wg.pools.Pool4.String(), "pool6": h.wg.pools.Pool6.String(),
+			},
 		},
 		"resync": resync,
 	})

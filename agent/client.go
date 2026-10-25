@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -108,6 +109,22 @@ func (c *backendClient) postUsage(ctx context.Context, report usageReport) (usag
 	var out usageAck
 	_, err := c.do(ctx, http.MethodPost, "/v1/nodes/"+c.nodeID+"/usage", report, &out)
 	return out, err
+}
+
+// getWgPeers fetches the WireGuard peer table; errUnchanged on a 204 for the
+// given etag.
+func (c *backendClient) getWgPeers(ctx context.Context, etag string) (wgPeersResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var out wgPeersResponse
+	status, err := c.do(ctx, http.MethodGet, "/v1/nodes/"+c.nodeID+"/wg?etag="+url.QueryEscape(etag), nil, &out)
+	if err != nil {
+		return wgPeersResponse{}, err
+	}
+	if status == http.StatusNoContent {
+		return wgPeersResponse{}, errUnchanged
+	}
+	return out, nil
 }
 
 func (c *backendClient) heartbeat(ctx context.Context, req heartbeatRequest) (heartbeatResponse, error) {

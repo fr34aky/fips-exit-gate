@@ -18,6 +18,11 @@ var migrationsFS embed.FS
 // Store wraps a pgx connection pool.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// WireGuard: inner address plan and per-identity peer cap (zero values =
+	// DefaultWgPools / DefaultMaxWgPeersPerAddr).
+	WgPools           WgPools
+	MaxWgPeersPerAddr int
 }
 
 // Open connects to Postgres and applies pending migrations.

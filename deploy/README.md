@@ -58,6 +58,12 @@ the token (same secret) to greet the visitor with their status.
 Native fips traffic (`.fips`, other fd00::/8 peers) must be **unaffected**
 throughout — the gate only touches traffic to `EXIT_FIPS_ADDR` on service ports.
 
+## WireGuard service
+
+`wireguard/`, `sysctl.d/` and `fips-firewall/` hold the pieces for the
+whole-device WireGuard service (`WG_IF` in `.env`, `wg 51820 udp` in
+`services.conf`); runbook in `../docs/wireguard.md`.
+
 ## Phase 2: dynamic authorization (exit-agent)
 
 Instead of the static `allowlist.txt`, run the exit-agent (`--profile agent` in

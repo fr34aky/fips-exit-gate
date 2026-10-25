@@ -47,6 +47,7 @@ public one.
 | `fipsexit_agent_usage_reports_sent_total` | counter | Usage reports delivered. |
 | `fipsexit_agent_usage_reports_buffered` | gauge | Reports currently buffered on disk. |
 | `fipsexit_agent_usage_reports_dropped_total` | counter | Reports dropped (buffer full). |
+| `fipsexit_agent_wg_peers` | gauge | WireGuard peers configured on the node (0 when the service is off). |
 
 **Captive** (`fipsexit_captive_`)
 

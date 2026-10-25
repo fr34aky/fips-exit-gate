@@ -275,6 +275,12 @@ Set the store's **Transaction Speed to ≥ 1 confirmation** so on-chain payments
 grant only once finalized (Lightning stays instant). Full runbook:
 [docs/phase4-btcpay.md](phase4-btcpay.md).
 
+## WireGuard (whole-device, no proxy settings)
+
+Optional: offer a WireGuard endpoint over fips so clients import one
+configuration instead of proxy settings. Same authorization and billing;
+setup in [WireGuard](wireguard.md).
+
 ## Client browser setup (PAC)
 
 Clients browse the Internet through the exit's SOCKS5 proxy while still reaching

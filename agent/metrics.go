@@ -25,6 +25,7 @@ type agentMetrics struct {
 	usageSent       *metrics.Counter
 	usageDropped    *metrics.Counter
 	usageBuffered   *metrics.Gauge
+	wgPeers         *metrics.Gauge
 }
 
 func newAgentMetrics() *agentMetrics {
@@ -41,6 +42,7 @@ func newAgentMetrics() *agentMetrics {
 		usageSent:       r.Counter("fipsexit_agent_usage_reports_sent_total", "Usage reports delivered to the backend"),
 		usageDropped:    r.Counter("fipsexit_agent_usage_reports_dropped_total", "Usage reports dropped (buffer full)"),
 		usageBuffered:   r.Gauge("fipsexit_agent_usage_reports_buffered", "Usage reports currently buffered on disk"),
+		wgPeers:         r.Gauge("fipsexit_agent_wg_peers", "WireGuard peers configured on the node (0 when the service is off)"),
 	}
 	r.Collect(func() []metrics.Sample {
 		return []metrics.Sample{{Name: "fipsexit_agent_goroutines", Help: "Number of goroutines", Value: float64(goruntime.NumGoroutine())}}
@@ -93,6 +95,12 @@ func (m *agentMetrics) setBuffered(n int) {
 		return
 	}
 	m.usageBuffered.Set(float64(n))
+}
+func (m *agentMetrics) setWgPeers(n int) {
+	if m == nil {
+		return
+	}
+	m.wgPeers.Set(float64(n))
 }
 func (m *agentMetrics) setAuthorized(n int) {
 	if m == nil {

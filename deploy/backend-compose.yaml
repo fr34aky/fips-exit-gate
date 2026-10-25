@@ -65,6 +65,11 @@ services:
       PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-0}
       PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-http://localhost:8080}
       PORTAL_DEV_AUTOSETTLE: ${PORTAL_DEV_AUTOSETTLE:-0}
+      WG_POOL4: ${WG_POOL4:-10.64.0.0/16}
+      WG_POOL6: ${WG_POOL6:-fc10:f1b5:ea17::/64}
+      WG_PORT: ${WG_PORT:-51820}
+      WG_MTU: ${WG_MTU:-1280}
+      WG_MAX_PEERS_PER_ADDR: ${WG_MAX_PEERS_PER_ADDR:-5}
       # Payments. PAYMENT_RAIL selects the rail: btcpay | phoenixd | empty.
       PAYMENT_RAIL: ${PAYMENT_RAIL:-}
       # BTCPay (PAYMENT_RAIL=btcpay). Empty BTCPAY_URL also disables it.

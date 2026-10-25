@@ -22,6 +22,7 @@ type backend interface {
 	getAuthz(ctx context.Context, rev int64, wait int) (authzResponse, error)
 	postUsage(ctx context.Context, report usageReport) (usageAck, error)
 	heartbeat(ctx context.Context, req heartbeatRequest) (heartbeatResponse, error)
+	getWgPeers(ctx context.Context, etag string) (wgPeersResponse, error)
 }
 
 // Agent wires the store, backend client, and firewall together and runs the
@@ -33,6 +34,13 @@ type Agent struct {
 
 	nodeName    string
 	enrollToken string
+
+	// WireGuard (optional): when wg is set the agent mirrors the backend's
+	// peer table onto that interface and announces its key + wgEndpoint.
+	wg          WgIface
+	wgEndpoint  string
+	wgSyncEvery time.Duration
+	wgEtag      string
 
 	// fullSyncEvery bounds how long the kernel set may silently drift from the
 	// backend before runSync forces a full reconcile even at an unchanged
@@ -58,6 +66,7 @@ func newAgent(st *store, cl backend, fw Firewall, name, enrollToken string, fail
 		nodeName:             name,
 		enrollToken:          enrollToken,
 		fullSyncEvery:        5 * time.Minute,
+		wgSyncEvery:          15 * time.Second,
 		cfg:                  agentConfig{UsageIntervalS: 30, GraceMinutes: 240},
 		services:             map[uint16]string{},
 		failClosedAfterGrace: failClosed,
@@ -122,8 +131,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.lastAuthzOK = a.now()
 	a.mu.Unlock()
 
+	loops := []func(context.Context){a.runSync, a.runUsage, a.runHeartbeat}
+	if a.wg != nil {
+		loops = append(loops, a.runWgSync)
+	}
 	var wg sync.WaitGroup
-	for _, loop := range []func(context.Context){a.runSync, a.runUsage, a.runHeartbeat} {
+	for _, loop := range loops {
 		wg.Add(1)
 		go func(f func(context.Context)) { defer wg.Done(); f(ctx) }(loop)
 	}
@@ -393,13 +406,18 @@ func (a *Agent) runHeartbeat(ctx context.Context) {
 		set, _ := a.fw.ListAuthorized()
 		a.metrics.setAuthorized(len(set))
 		snap := a.store.snapshotRuntime()
-		resp, err := a.client.heartbeat(ctx, heartbeatRequest{
-			Version:  agentVersion,
-			AuthzRev: snap.AuthzRev,
-			SetSize:  len(set),
-		})
+		req := heartbeatRequest{Version: agentVersion, AuthzRev: snap.AuthzRev, SetSize: len(set)}
+		if a.wg != nil {
+			if pub, err := a.wg.PublicKey(); err == nil {
+				req.WgPubkey, req.WgEndpoint = pub, a.wgEndpoint
+			} else {
+				log.Printf("agent: heartbeat: wg public key: %v", err)
+			}
+		}
+		resp, err := a.client.heartbeat(ctx, req)
 		if err == nil {
 			a.applyConfig(resp.Config)
+			a.checkWgConfig(resp.Config.Wg)
 			if resp.Resync {
 				log.Printf("agent: backend reported set drift (local=%d), forcing full reconcile", len(set))
 				a.requestResync()
@@ -427,6 +445,22 @@ func (a *Agent) applyConfig(cfg agentConfig) {
 		}
 		a.services = m
 	}
+}
+
+// checkWgConfig warns (once per change) when the backend's address plan
+// disagrees with what this node was told in deploy/.env: the rendered nftables
+// policy and the client configs would then not match.
+func (a *Agent) checkWgConfig(cfg wgConfig) {
+	if a.wg == nil || cfg.Port == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg.Wg == cfg {
+		return
+	}
+	a.cfg.Wg = cfg
+	log.Printf("agent: backend WireGuard plan: port %d, pools %s %s — make sure deploy/.env WG_* and wg0 match", cfg.Port, cfg.Pool4, cfg.Pool6)
 }
 
 // --- helpers ----------------------------------------------------------------

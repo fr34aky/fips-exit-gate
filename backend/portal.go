@@ -40,6 +40,7 @@ type portal struct {
 	cashu           *payments.CashuRedeemer // nil unless the Cashu accept-and-melt option is enabled
 	publicURL       string                  // portal base URL for checkout/pay redirects
 	pacHost         string                  // exit <npub>.fips host for served PACs ("" = derive from publicURL)
+	wg              wgSettings              // WireGuard address plan for rendered client configs
 	tmpl            *template.Template
 }
 
@@ -65,6 +66,8 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard", p.dashboard)
 	mux.HandleFunc("POST /whitelist/add", p.whitelistAdd)
 	mux.HandleFunc("POST /whitelist/toggle", p.whitelistToggle)
+	mux.HandleFunc("POST /wg/new", p.wgNew)
+	mux.HandleFunc("POST /wg/delete", p.wgDelete)
 	mux.HandleFunc("GET /captive", p.captive)
 	mux.HandleFunc("GET /help", p.help)
 	mux.HandleFunc("GET /proxy-clear.pac", p.pacFor("clearnet")) // Connectivity profile
@@ -379,12 +382,130 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error loading account", http.StatusInternalServerError)
 		return
 	}
-	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err")}
+	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err"),
+		"Msg": r.URL.Query().Get("msg")}
 	if clear, priv := p.pacLinks(r.Context()); clear != "" {
 		data["PacClearURL"] = clear
 		data["PacPrivURL"] = priv // may be "" if Privacy isn't enabled
 	}
+	// WireGuard (whole-device) section: shown when the service is in the catalog
+	// and at least one exit announced a key.
+	if nodes := p.wgNodes(r.Context()); len(nodes) > 0 {
+		data["WgNodes"] = nodes
+		if peers, err := p.store.ListWgPeers(r.Context(), summary.Account.ID); err == nil {
+			data["WgPeers"] = peers
+		}
+	}
 	p.render(w, "dashboard.html", data)
+}
+
+// wgNodes returns the exits offering WireGuard, or nil when the service is not
+// enabled in the catalog.
+func (p *portal) wgNodes(ctx context.Context) []store.WgNode {
+	services, err := p.store.EnabledServices(ctx)
+	if err != nil {
+		return nil
+	}
+	enabled := false
+	for _, s := range services {
+		if s.Key == "wg" {
+			enabled = true
+		}
+	}
+	if !enabled {
+		return nil
+	}
+	nodes, err := p.store.WgNodes(ctx)
+	if err != nil {
+		return nil
+	}
+	return nodes
+}
+
+// wgNew issues a WireGuard peer for one of the account's identities and shows
+// the configuration ONCE (private key included unless the user supplied their
+// own public key). Nothing secret is stored.
+func (p *portal) wgNew(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	nodes := p.wgNodes(r.Context())
+	if len(nodes) == 0 {
+		http.Error(w, "WireGuard is not offered on this exit", http.StatusNotFound)
+		return
+	}
+	forNpub := strings.TrimSpace(r.FormValue("device_npub"))
+	if forNpub == "" {
+		forNpub = npub
+	}
+	label := strings.TrimSpace(r.FormValue("label"))
+	priv, pub := "", strings.TrimSpace(r.FormValue("pubkey"))
+	if pub == "" {
+		var err error
+		if priv, pub, err = genWgKeypair(); err != nil {
+			http.Error(w, "key generation failed", http.StatusInternalServerError)
+			return
+		}
+	}
+	peer, err := p.store.CreateWgPeer(r.Context(), npub, forNpub, label, pub)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyWgErr(err)), http.StatusSeeOther)
+		return
+	}
+	type cfgView struct {
+		Node   string
+		Config string
+		QR     template.URL
+		Data   template.URL
+	}
+	var cfgs []cfgView
+	for _, n := range nodes {
+		cfg := renderWgConfig(priv, peer, n, p.wg, p.publicURL)
+		if priv == "" {
+			cfg = strings.Replace(cfg, "PrivateKey = \n", "PrivateKey = <your private key>\n", 1)
+		}
+		cv := cfgView{Node: n.Name, Config: cfg,
+			Data: template.URL("data:application/octet-stream;base64," + base64.StdEncoding.EncodeToString([]byte(cfg)))}
+		if priv != "" {
+			cv.QR = qrDataURI(cfg)
+		}
+		cfgs = append(cfgs, cv)
+	}
+	p.render(w, "wg_new.html", map[string]any{"Peer": peer, "Configs": cfgs, "OwnKey": priv == ""})
+}
+
+func (p *portal) wgDelete(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.DeleteWgPeer(r.Context(), npub, strings.TrimSpace(r.FormValue("id"))); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyWgErr(err)), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("WireGuard device removed. The exit stops accepting its key within a minute."), http.StatusSeeOther)
+}
+
+func friendlyWgErr(err error) string {
+	switch err {
+	case store.ErrWgPeerLimit:
+		return "That identity already has the maximum number of WireGuard devices."
+	case store.ErrWgForbidden:
+		return "That identity is not on your account."
+	case store.ErrWgBadKey:
+		return "That is not a valid WireGuard public key (or it is already in use)."
+	case store.ErrWgNotActive:
+		return "That identity is not active on any account yet."
+	case store.ErrWgPoolFull:
+		return "No free tunnel address right now; contact the operator."
+	case store.ErrWgPeerNotFound:
+		return "That WireGuard device was not found."
+	default:
+		return "Could not create the WireGuard device."
+	}
 }
 
 func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
