@@ -25,6 +25,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 RuntimeDirectory=fips-exit-tunnel
+# Keep the pidfile and the saved rp_filter value across the crash restarts the
+# script is designed for; the directory is removed on an explicit stop.
+RuntimeDirectoryPreserve=restart
 
 [Install]
 WantedBy=multi-user.target

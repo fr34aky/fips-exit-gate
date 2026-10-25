@@ -46,17 +46,24 @@ What the script does (`DRY_RUN=1 fips-exit-tunnel up` prints it):
    Internet traffic goes into a TUN nobody reads and times out instead of
    leaking out the normal default route, while fips, the LAN and the fips
    daemon's uplink keep working. systemd restarts the service into the same
-   device. Only `fips-exit-tunnel down`, which is what `systemctl stop` runs,
-   removes the device and restores normal routing. So a broken tunnel means
-   *no Internet*, never *unprotected Internet*.
-3. Adds policy rules: fd00::/8, every connected LAN prefix, anything in
-   `UPLINK_EXCLUDE`, and (if set) all traffic of `FIPS_UID` keep the main
-   table; everything else uses the tunnel table.
+   device. Only an explicit stop (`systemctl stop fips-exit-tunnel`; a bare
+   `fips-exit-tunnel down` hands over to systemctl when the unit is active,
+   because otherwise `Restart=` would bring the tunnel straight back) removes
+   the device and restores normal routing. A setup failure during a restart
+   likewise keeps the existing fail-closed routing rather than tearing it
+   down. So a broken tunnel means *no Internet*, never *unprotected Internet*.
+3. Adds policy rules: a `lookup main suppress_prefixlength 0` rule first, so
+   every route in the main table *except* a default route keeps winning
+   (connected LAN prefixes, including ones that appear later when you change
+   WiFi or start a container bridge; fd00::/8 via `fips0`; host routes), then
+   anything in `UPLINK_EXCLUDE` and (if set) all traffic of `FIPS_UID`;
+   everything that would have taken the default route uses the tunnel table.
 4. Sets `net.ipv4.conf.all.rp_filter=2` (loose) while up, restoring the old
-   value on `down`. With strict reverse-path filtering the kernel would drop
+   value on stop. With strict reverse-path filtering the kernel would drop
    replies to the traffic that bypasses the tunnel (the fips daemon's own
    uplink), because the reverse lookup has no socket uid and resolves into the
-   tunnel table.
+   tunnel table. (`all=0` is not "off": the effective value is the maximum of
+   `all` and the interface's own, so only an explicit 2 is good enough.)
 5. Points systemd-resolved at DNS-over-TLS servers **on the TUN** with the
    routing domain `~.`, so every name except `.fips` (which fips' own resolver
    keeps, via its more specific `~fips` domain) resolves through the tunnel
@@ -66,7 +73,8 @@ What the script does (`DRY_RUN=1 fips-exit-tunnel up` prints it):
 
 fips reaches its peers over your real uplink (UDP/TCP transports). If those
 packets were routed into the TUN you would have a loop and no fips at all.
-Two ways to exclude them, in order of preference:
+The script warns loudly if neither exclusion is configured. Two ways to
+exclude them, in order of preference:
 
 - Run the fips daemon under its own user and set `FIPS_UID`: the policy rule
   `uidrange` exempts all of its traffic, whatever peers it discovers.
@@ -105,7 +113,7 @@ curl -4 https://ifconfig.co        # the exit's public IPv4
 curl -6 https://ifconfig.co        # the exit's public IPv6
 resolvectl query example.com       # answered via fipsexit0 (DoT)
 curl http://npub1….fips:8080/      # portal still loads natively over fips
-sudo kill $(cat /run/fips-exit-tunnel/tun2socks.pid); curl -m5 https://ifconfig.co   # must time out (fail-closed); fips still works
+sudo kill $(cat /run/fips-exit-tunnel/tun2socks.pid); curl -m5 https://ifconfig.co   # must time out (fail-closed); fips still works; systemd restarts the tunnel
 ```
 
 Unauthorized or out of credit? Plain-HTTP requests still get the captive
