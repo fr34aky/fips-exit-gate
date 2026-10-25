@@ -1,0 +1,30 @@
+# Whole-device Internet through a fips exit, no proxy settings.
+#   install -Dm755 fips-exit-tunnel.sh /usr/local/bin/fips-exit-tunnel
+#   install -Dm600 fips-exit-tunnel.env.example /etc/fips-exit/tunnel.env   # then edit
+#   install -Dm644 fips-exit-tunnel.service /etc/systemd/system/
+#   systemctl enable --now fips-exit-tunnel
+[Unit]
+Description=fips-exit whole-device tunnel (tun2socks to the exit's SOCKS port)
+After=network-online.target fips.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/fips-exit/tunnel.env
+ExecStart=/usr/local/bin/fips-exit-tunnel up
+# On SIGTERM (systemctl stop) the script tears down and restores routing. On a
+# crash it exits leaving the device fail-closed, and systemd restarts it; no
+# ExecStopPost on purpose, so a crash never opens the normal default route.
+KillSignal=SIGTERM
+Restart=on-failure
+RestartSec=3
+StartLimitIntervalSec=0
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+RuntimeDirectory=fips-exit-tunnel
+
+[Install]
+WantedBy=multi-user.target

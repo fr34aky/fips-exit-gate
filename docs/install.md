@@ -312,6 +312,15 @@ if the exit is down, Internet traffic fails closed rather than leaking around th
 proxy. Hosting the file at a `<npub>.fips` URL lets you push an exit-address
 change to every client at once.
 
+## Whole-device mode (no proxy settings)
+
+To send *everything* on a client through the exit — not just the browser — see
+[Whole-device mode](client-tunnel.md): a small systemd service in
+`deploy/client/` runs `tun2socks` on a TUN, policy-routes all Internet traffic
+into the exit's SOCKS port over fips (failing closed if the tunnel dies), keeps
+fips and the LAN direct, and moves DNS to DNS-over-TLS so names resolve through
+the tunnel. Nothing changes on the exit; gating and billing are identical.
+
 ## Uninstall / teardown
 
 ```sh

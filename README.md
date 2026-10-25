@@ -46,7 +46,7 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 | `captive/` | The captive daemon: a minimal SOCKS5 server that answers **unauthorized** clients with an HTTP `302` to the portal (carrying a signed token) and cleanly refuses everything else. |
 | `agent/` | The exit-node agent: reconciles the nftables `authorized` set from the backend (long-poll), reads the per-`(client,service)` byte counters, reports usage, and enforces quota cutoffs. Drives `nft`; otherwise stdlib-only (portable to OpenWrt). |
 | `backend/` | The control plane + user portal (Go + Postgres): the agent-facing API (enroll / authz / usage), nostr login (NIP-07 + transparent fips-source), the package catalog, whitelist management, and the BTCPay payment webhook. |
-| `deploy/` | Everything to run a node: compose files, the templated **nftables** ruleset (`render-nftables.sh` over `services.conf`), unbound config, `up.sh`, systemd units, and the BTCPay stack. |
+| `deploy/` | Everything to run a node: compose files, the templated **nftables** ruleset (`render-nftables.sh` over `services.conf`), unbound config, `up.sh`, systemd units, the BTCPay stack, and `client/` (the whole-device tunnel for clients). |
 | `cmd/` | CLIs: `fips-derive` (npub→address), and `fake-backend` / `fake-btcpay` test doubles for local/hardware bring-up without the real dependencies. |
 | `docs/` | This documentation and the specs (derivation, agent↔backend API, data model, threat model). |
 
@@ -84,6 +84,7 @@ and never metered.
 - **[Observability](docs/observability.md)** — Prometheus `/metrics` on every service, plus scrape config and alert rules.
 - **[Hardening](docs/hardening.md)** — egress abuse policy, per-account ceilings, logging/privacy.
 - **[Testing payments](docs/testing-payments.md)** — run the BTCPay, phoenixd, and Cashu fakes to exercise payments with no real node, mint, or channel.
+- **[Whole-device mode](docs/client-tunnel.md)** — route an entire client (not just the browser) through the exit with no proxy settings, using the `deploy/client/` tunnel service.
 
 Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md).
 
@@ -93,6 +94,7 @@ Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/a
 
 ```sh
 gofmt -l . && go vet ./... && go test ./...
+sh deploy/client/test/run-tunnel-test.sh   # whole-device client tunnel against a real SOCKS server (needs Docker)
 ```
 
 Store integration tests run only when `TEST_DATABASE_URL` is set (use a
