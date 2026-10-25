@@ -9,7 +9,7 @@ OpenWrt-portable.
 
 | Service | Endpoint | How to enable |
 |---|---|---|
-| **backend** | `GET /metrics` on the API port (`:8080`) | Always registered. Optionally gate with `METRICS_TOKEN` (Prometheus scrapes with a bearer token); otherwise restrict by network/reverse-proxy. |
+| **backend** | `GET /metrics` on the admin listener (`LISTEN_ADMIN`, default `127.0.0.1:8081`) | Always registered. Bind `LISTEN_ADMIN` to a management interface to scrape it, and gate with `METRICS_TOKEN` (Prometheus scrapes with a bearer token). |
 | **agent** | `GET /metrics` on `FIPS_AGENT_METRICS_ADDR` | Set the env var (e.g. `:9101`). Empty = disabled. |
 | **captive** | `GET /metrics` on `CAPTIVE_METRICS_ADDR` | Set the env var (e.g. `:9102`). Empty = disabled. |
 

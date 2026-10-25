@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"log"
+	"errors"
 	"net/netip"
 	"strconv"
 	"time"
@@ -245,6 +246,11 @@ type authzStatus struct {
 	hash  string
 }
 
+// ErrCompacted is returned by DeltaSince when the log no longer reaches back
+// to the client's cursor (CompactAuthzRevisions ran); the caller sends a full
+// set instead.
+var ErrCompacted = errors.New("store: revision log compacted past the client's cursor")
+
 // DeltaSince returns the net add/del since clientRev by replaying the revision
 // log (so an add-then-del of the same address collapses correctly). The rows
 // and the returned revision are read in ONE snapshot (readTxRR): the revision
@@ -252,6 +258,15 @@ type authzStatus struct {
 // cursor past a change it wasn't handed and skips it permanently.
 func (s *Store) DeltaSince(ctx context.Context, clientRev int64) (add []AuthzMember, del []netip.Addr, rev int64, err error) {
 	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
+		// Every revision above the cursor must still exist; otherwise a delta
+		// would silently miss the compacted ones.
+		var minRev int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(min(rev), 0) FROM authz_revisions`).Scan(&minRev); err != nil {
+			return err
+		}
+		if minRev > 0 && clientRev+1 < minRev {
+			return ErrCompacted
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT op, host(fips_addr), account_id::text FROM authz_revisions WHERE rev > $1 ORDER BY rev`, clientRev)
 		if err != nil {

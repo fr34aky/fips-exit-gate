@@ -134,6 +134,33 @@ func (c *Client) CreateInvoice(ctx context.Context, req InvoiceRequest) (Invoice
 	return inv, nil
 }
 
+// InvoiceStatus fetches an invoice's current status from the Greenfield API
+// ("New", "Processing", "Settled", "Expired", "Invalid"). The webhook handler
+// confirms a Settled event against this before granting access, so a forged
+// or stale webhook with a valid HMAC is not enough on its own.
+func (c *Client) InvoiceStatus(ctx context.Context, invoiceID string) (string, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/api/v1/stores/"+c.storeID+"/invoices/"+invoiceID, nil)
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Authorization", "token "+c.apiKey)
+	resp, err := c.hc.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("btcpay: get invoice: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var inv Invoice
+	if err := json.Unmarshal(body, &inv); err != nil {
+		return "", fmt.Errorf("btcpay: decode invoice: %w", err)
+	}
+	return inv.Status, nil
+}
+
 // WebhookEvent is the JSON body BTCPay POSTs to the webhook endpoint.
 type WebhookEvent struct {
 	DeliveryID string `json:"deliveryId"`

@@ -27,10 +27,11 @@ Read by `backend/` (see `backend/main.go`).
 |---|---|---|
 | `DATABASE_URL` | — (**required**) | Postgres DSN, e.g. `postgres://fips:pw@db:5432/fips_exit`. Under `backend-compose.yaml` this is **built for you** from `PGUSER`/`PGPASSWORD`/`PGDATABASE` (set those in `backend.env` instead — see below). |
 | `ADMIN_TOKEN` | — (**required**) | Bearer token protecting `/admin`. |
-| `LISTEN` | `:8080` | Listen address. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. For **transparent fips login** the backend must see the client's real source address — run it with **host networking**, not behind bridge NAT (see note below). |
+| `LISTEN` | `:8080` | Public listener: portal, agent API, payment webhooks. `:8080` binds all interfaces; use `[<fips-addr>]:8080` to serve the portal only over fips. For **transparent fips login** the backend must see the client's real source address — run it with **host networking**, not behind bridge NAT (see note below). |
+| `LISTEN_ADMIN` | `127.0.0.1:8081` | Operator listener: `/admin/*` and `/metrics`, loopback by default so the static admin token is never reachable from the public port. Set e.g. `:8081` on a management interface to scrape metrics remotely; set it equal to `LISTEN` to run everything on one port (old behaviour). |
 | `SESSION_SECRET` | random | HMAC key for portal session cookies. Set it, or sessions drop on restart. |
 | `CHALLENGE_SECRET` | random | HMAC key for login challenges. Set it in production. |
-| `CAPTIVE_TOKEN_SECRET` | — | Verifies captive redirect tokens. **Must equal the exit node's value.** |
+| `CAPTIVE_TOKEN_SECRET` | — (**required**) | Verifies captive redirect tokens. **Must equal the exit node's value.** The backend refuses to start without it (an empty secret would make tokens forgeable). |
 | `PORTAL_PUBLIC_URL` | `http://localhost:8080` | Public base URL; BTCPay redirects buyers back here after paying. Over fips, prefer the portal's `<npub>.fips` URL (see [Addressing the portal](#addressing-the-portal-over-fips)). |
 | `PORTAL_PAC_HOST` | derived | Exit `<npub>.fips` host for the portal-served PACs. The portal serves one per profile — `GET /proxy-clear.pac` (Connectivity) and `GET /proxy-priv.pac` (Privacy), each using that service's catalog port; `/fips.pac` stays as a Connectivity alias. Empty = derive the host from `PORTAL_PUBLIC_URL`. The dashboard and FAQ link customers to them. |
 | `PORTAL_TRUST_FIPS_SOURCE` | **on** | Transparent fips-source login. On by default (the portal is reached natively over fips). Set `0` **only** when a reverse proxy masks the client source (e.g. a public HTTPS portal) — otherwise everyone would appear as the proxy. |
@@ -41,6 +42,9 @@ Read by `backend/` (see `backend/main.go`).
 | `EXPIRY_SWEEP_S` | `60` | Timer-driven recompute of the authorized set, so entitlements that lapse while an account is idle are revoked promptly. `0` disables. |
 | `AUTHZ_ALLOW_MASS_REVOKE` | `0` | `1` marks full authz responses `force: true`, so agents apply a full reconcile even when it would revoke most of their live set. Use deliberately (e.g. after purging accounts), then unset. |
 | `MAX_GUESTS_PER_ACCOUNT` | `5` | Maximum guest identities an account may invite (pending or accepted). The admin API is not capped. |
+| `RETENTION_DAYS` | `90` | Raw per-window usage samples older than this are rolled up into per-day totals and deleted (dashboard totals unchanged). `0` disables. |
+| `REVISION_RETENTION_DAYS` | `30` | Authz revision-log rows older than this are compacted (the newest row is always kept; an agent with an older cursor receives a full set). `0` disables. |
+| `RETENTION_SWEEP_S` | `3600` | How often the two retention steps run. |
 | `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |
@@ -120,6 +124,7 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_MASS_REVOKE_MIN` | `50` | Mass-revoke guard floor: a full reconcile is refused if it would delete more than this many addresses *and* more than half of the live set. |
 | `FIPS_AGENT_ALLOW_MASS_REVOKE` | `0` | `1` disables the mass-revoke guard on this node. |
 | `FIPS_AGENT_METRICS_ADDR` | — | If set (e.g. `:9101`), serve Prometheus `/metrics` here. Empty = disabled. |
+| `FIPS_AGENT_ALLOW_INSECURE` | `0` | The agent accepts `https://`, or plain `http://` only to loopback, a fips address or a `.fips` name (the mesh encrypts end to end). `1` allows plain http to any host (the node token then crosses the network unencrypted). |
 
 The agent needs `CAP_NET_ADMIN` (it shells out to `nft`) — the compose service
 grants it; under systemd the unit does.

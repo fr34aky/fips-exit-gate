@@ -1,8 +1,12 @@
 # Run the exit-agent directly on the host (alternative to the compose service).
 # It drives the host's nftables, so it needs CAP_NET_ADMIN and the nft binary.
 #
+#   install -Dm644 fips-exit-agent.sysusers.conf /usr/lib/sysusers.d/fips-exit-agent.conf && systemd-sysusers
 #   install -Dm600 agent.env /etc/fips-exit/agent.env   # fill in the vars
 #   systemctl enable --now fips-exit-agent
+# The unit runs as the unprivileged user fips-exit-agent (created by the
+# sysusers fragment above); upgrading from an older unit that ran as root
+# needs that step too, or the service fails with "Failed to determine user".
 [Unit]
 Description=fips-exit node agent (authz sync + usage accounting)
 After=network-online.target nftables.service
@@ -14,12 +18,31 @@ EnvironmentFile=/etc/fips-exit/agent.env
 ExecStart=/usr/local/bin/fips-exit-agent
 Restart=on-failure
 RestartSec=5
-# Least privilege: only what nft needs.
+# Least privilege: an unprivileged user with only the capability nft needs
+# (account from fips-exit-agent.sysusers.conf).
+User=fips-exit-agent
+Group=fips-exit-agent
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 StateDirectory=fips-exit-agent
 Environment=FIPS_AGENT_STATE_DIR=/var/lib/fips-exit-agent
 

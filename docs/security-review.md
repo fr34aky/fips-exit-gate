@@ -29,11 +29,10 @@ derivation/bech32 handling is correct.
   this repo and is the **top item to validate before launch** — see
   [threat-model.md §1](threat-model.md). The nftables gate + credential-free
   Dante are safe only under it.
-- **Challenge replay within its 120 s window (M2).** Challenges are stateless
-  HMACs, so a captured `(challenge, signed-event)` pair is replayable until it
-  expires. Capturing it requires MITM/client compromise, and the kind+tag
-  binding closes the practical social-engineering path. A single-use server-side
-  nonce cache would remove the residual — future work.
+- **Challenge replay (M2) — resolved.** Challenges are now single-use (an
+  in-memory used-challenge cache refuses a second presentation) and events
+  carrying a `u` tag are bound to this portal's host, so neither a captured
+  pair nor a relayed phishing signature authenticates.
 - **Semi-trusted exit nodes (L2).** An enrolled node can misreport usage for any
   authorized address (billing drain/DoS). Exit nodes are operator-run
   infrastructure; the byte clamp bounds the blast radius. Cross-node attribution

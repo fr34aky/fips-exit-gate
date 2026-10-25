@@ -2,10 +2,12 @@
 
 Day-two tasks: managing accounts, adding nodes/services, rotating secrets,
 backups, and upgrades. Admin calls use the backend's `/admin` API (bearer
-`ADMIN_TOKEN`).
+`ADMIN_TOKEN`), served on the operator listener `LISTEN_ADMIN` — loopback
+`127.0.0.1:8081` by default, so run these on the backend host (or over SSH
+port forwarding).
 
 ```sh
-H="Authorization: Bearer $ADMIN_TOKEN"; URL=https://backend.example:8080
+H="Authorization: Bearer $ADMIN_TOKEN"; URL=http://127.0.0.1:8081
 ```
 
 ## Admin quick reference

@@ -20,6 +20,9 @@ func main() {
 	if baseURL == "" {
 		log.Fatal("agent: FIPS_AGENT_BACKEND_URL is required")
 	}
+	if err := checkBackendURL(baseURL, os.Getenv("FIPS_AGENT_ALLOW_INSECURE") == "1"); err != nil {
+		log.Fatalf("agent: %v", err)
+	}
 	stateDir := getenv("FIPS_AGENT_STATE_DIR", "/var/lib/fips-exit-agent")
 	nftPath := getenv("FIPS_AGENT_NFT", "nft")
 	table := getenv("FIPS_AGENT_TABLE", "inet fips_exit")

@@ -113,14 +113,25 @@ usage_reports            -- idempotency ledger, one row per agent report
   window_end    timestamptz
   received_at
 
-usage_samples            -- per-address, per-service deltas, partitioned by month
-  report_id     fk -> usage_reports
-  service_id    fk -> services
+usage_samples            -- per-address, per-service deltas (one row per 30 s window)
+  report_id     fk -> usage_reports       -- ON DELETE CASCADE
+  service_id    fk -> services (null = unknown service key)
   fips_addr     inet
   account_id    fk null                   -- resolved at ingest; null if unknown
   bytes         bigint                    -- metered total (both directions);
                                           -- weighted consumption =
                                           -- bytes * services.rate_ppm / 1e6
+  -- NOT partitioned. Rows older than RETENTION_DAYS (90) are rolled up into
+  -- usage_daily and deleted with their reports (backend retention job);
+  -- samples with no account or an unknown service are dropped then.
+
+usage_daily              -- per-account, per-service, per-day totals (the roll-up)
+  account_id    fk -> accounts
+  service_id    fk -> services
+  day           date
+  bytes         bigint
+  pk (account_id, day, service_id)
+  -- dashboard and metrics totals = usage_samples + usage_daily
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -128,7 +139,10 @@ authz_revisions          -- append-only log driving the agent delta sync
   fips_addr     inet
   account_id    fk
   created_at
-  -- compacted periodically; full set = view over accounts/whitelist/entitlements
+  -- compacted after REVISION_RETENTION_DAYS (30): rows older than that are
+  -- deleted, always keeping the newest (max(rev) is the global revision); an
+  -- agent whose cursor predates the kept range is handed the full set, which
+  -- it reconciles against its kernel set.
 ```
 
 ## Portal sessions

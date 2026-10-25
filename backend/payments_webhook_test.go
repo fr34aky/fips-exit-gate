@@ -112,7 +112,7 @@ func TestBuyCreatesInvoice(t *testing.T) {
 
 	p := testPortal(t, st, false)
 	p.pay = payments.NewClient(fake.URL, "k", "STORE1", fake.Client())
-	p.publicURL = "http://portal"
+	p.publicURL = "http://portal.test"
 	h := &handlers{store: st, usageIntervalS: 30, graceMinutes: 240}
 	srv := httptest.NewServer(routes(h, p, st, "admintok", nil, nil, nil, ""))
 	defer srv.Close()
