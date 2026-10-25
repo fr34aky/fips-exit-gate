@@ -83,14 +83,18 @@ func (c *backendClient) enroll(ctx context.Context, req enrollRequest) (enrollRe
 }
 
 // getAuthz issues the long-poll sync. wait is the max seconds the server may
-// hold the request; rev is the last applied revision. Returns errUnchanged on
-// a 204.
-func (c *backendClient) getAuthz(ctx context.Context, rev int64, wait int) (authzResponse, error) {
+// hold the request; rev is the last applied revision; full asks for the
+// complete set immediately (even at backend revision 0) instead of a delta or
+// a long-poll. Returns errUnchanged on a 204.
+func (c *backendClient) getAuthz(ctx context.Context, rev int64, wait int, full bool) (authzResponse, error) {
 	// Client-side deadline slightly beyond the server hold.
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(wait+10)*time.Second)
 	defer cancel()
 	path := "/v1/nodes/" + c.nodeID + "/authz?rev=" + strconv.FormatInt(rev, 10) +
 		"&wait=" + strconv.Itoa(wait)
+	if full {
+		path += "&full=1"
+	}
 	var out authzResponse
 	status, err := c.do(ctx, http.MethodGet, path, nil, &out)
 	if err != nil {

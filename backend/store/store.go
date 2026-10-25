@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +20,8 @@ var migrationsFS embed.FS
 type Store struct {
 	pool *pgxpool.Pool
 
+	statusMu    sync.Mutex
+	statusCache authzStatus // AuthzStatus memo, keyed by revision
 	// MaxGuests caps guest invitations per account (0 = DefaultMaxGuests).
 	MaxGuests int
 }

@@ -48,10 +48,20 @@ func main() {
 	st.MaxGuests = getenvInt("MAX_GUESTS_PER_ACCOUNT", store.DefaultMaxGuests)
 
 	h := &handlers{
-		store:          st,
-		usageIntervalS: getenvInt("USAGE_INTERVAL_S", 30),
-		graceMinutes:   getenvInt("GRACE_MINUTES", 240),
+		store:           st,
+		usageIntervalS:  getenvInt("USAGE_INTERVAL_S", 30),
+		graceMinutes:    getenvInt("GRACE_MINUTES", 240),
+		revs:            newRevWaiter(),
+		allowMassRevoke: os.Getenv("AUTHZ_ALLOW_MASS_REVOKE") == "1",
 	}
+	if h.allowMassRevoke {
+		log.Printf("backend: AUTHZ_ALLOW_MASS_REVOKE=1 — agents will apply full reconciles that revoke most of their set")
+	}
+	// Wake agent long-polls the moment RecomputeAuthz commits (LISTEN/NOTIFY);
+	// the handler keeps a slow poll as a backstop.
+	go st.ListenAuthz(ctx, h.revs.broadcast)
+	// Time-driven expiry: entitlements that lapse while their account is idle.
+	go runExpirySweep(ctx, st, time.Duration(getenvInt("EXPIRY_SWEEP_S", 60))*time.Second)
 	p, err := newPortal(st,
 		secretEnv("SESSION_SECRET"),
 		secretEnv("CHALLENGE_SECRET"),

@@ -151,4 +151,7 @@ sessions
   statement at usage ingest; crossing the limit emits `del` to
   `authz_revisions` and the inline `revoke` in the usage ack.
 - Whitelist changes and entitlement expiry both write `authz_revisions`;
-  a periodic sweep expires time-based entitlements between traffic events.
+  a periodic sweep (`EXPIRY_SWEEP_S`, default 60 s) recomputes the set between
+  traffic events so time-based entitlements expire on time. Recomputes are
+  serialized by an advisory lock so revision numbers are monotonic in commit
+  order, and each one `NOTIFY`s agent long-polls.

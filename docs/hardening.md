@@ -85,6 +85,31 @@ Volume (not rate) is already metered and enforced by the quota system: usage
 draws down the package balance and exhaustion revokes the address within a usage
 interval (see [maintenance](maintenance.md#revoke-or-suspend-access)).
 
+### Revocation cuts live connections
+
+The gate is enforced twice: a NAT rule decides once per connection whether a
+new flow reaches the service or the captive daemon, and filter rules
+(`svc_in`/`svc_out` in the rendered ruleset) re-check `authorized` membership on
+**every packet** and reset a flow whose source is no longer in the set. So when
+a package runs out or a guest is disabled, the client's open tunnels die on
+their next packet; they cannot keep using a connection opened while they were
+still authorized. A revoked tunnel that stays silent is cleaned up too: the
+dispatcher's listener sends TCP keepalives (Go's 15 s default), the keepalive
+toward a de-authorized address is reset by `svc_out`, and the dispatcher sees
+`ECONNRESET` and closes both sides within about 30 s. On top of that the
+dispatcher bounds every tunnel by `DISPATCH_IDLE_TIMEOUT_S` (default 2 h, so
+long-idle but legitimate sessions such as IMAP IDLE or SSH survive) and,
+opt-in, `DISPATCH_MAX_LIFETIME_S`.
+
+The same `svc_in` chain resets service-port traffic that did not arrive on the
+fips interface, which is why testing the proxy from the exit host itself gets
+"connection refused" (see [Troubleshooting](troubleshooting.md)). Ports a
+compose service may bind that are missing from `services.conf` are refused
+from fips as well (`GUARD_PORTS` in `up.sh`).
+
+`deploy/test/run-nft-gate-test.sh` exercises all of this against a real kernel
+in a throwaway container (redirect, accept, loopback drop, live reset, acct).
+
 ## Logging & privacy
 
 The design records **what** was used, not **where** it went.
