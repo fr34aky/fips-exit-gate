@@ -16,8 +16,14 @@ func TestBackendClientRoundTrips(t *testing.T) {
 	// authz: return 204 when rev=5, else a full set.
 	mux.HandleFunc("GET /v1/nodes/{id}/authz", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("rev") == "5" {
+			if r.URL.Query().Has("full") {
+				t.Errorf("delta poll must not carry full=1")
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if r.URL.Query().Get("full") != "1" {
+			t.Errorf("forced reconcile must send full=1, got query %q", r.URL.RawQuery)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer t1" {
 			t.Errorf("missing bearer auth, got %q", got)
@@ -39,7 +45,7 @@ func TestBackendClientRoundTrips(t *testing.T) {
 	}
 	c.setAuth(en.NodeID, en.AuthToken)
 
-	az, err := c.getAuthz(ctx, 0, 1)
+	az, err := c.getAuthz(ctx, 0, 1, true)
 	if err != nil {
 		t.Fatalf("getAuthz: %v", err)
 	}
@@ -47,7 +53,7 @@ func TestBackendClientRoundTrips(t *testing.T) {
 		t.Fatalf("authz decode wrong: %+v", az)
 	}
 
-	if _, err := c.getAuthz(ctx, 5, 1); err != errUnchanged {
+	if _, err := c.getAuthz(ctx, 5, 1, false); err != errUnchanged {
 		t.Fatalf("expected errUnchanged for 204, got %v", err)
 	}
 

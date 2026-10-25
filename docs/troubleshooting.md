@@ -44,6 +44,23 @@ fips_exit authorized`) and that the loaded ruleset has the `svc_in` chain
 (`nft list chain inet fips_exit svc_in`; an old ruleset predating it only gates
 new connections — `sudo ./up.sh reload`).
 
+## Agent logs `REFUSING full reconcile`
+
+**Symptom:** `agent: REFUSING full reconcile: full set would revoke N of M live
+addresses`, and `fipsexit_agent_mass_revoke_refusals_total` increases.
+**Cause:** the backend returned a full authorized set that would remove more
+than `FIPS_AGENT_MASS_REVOKE_MIN` (50) addresses *and* more than half of what
+the node currently serves. The agent treats that as a probable backend problem
+(restored/empty database, agent pointed at the wrong backend, broken
+recompute) rather than N simultaneous cancellations, and keeps serving its
+last-known set; delta syncs continue from the persisted cursor, so genuine
+revocations still arrive.
+**Fix:** check `/admin/authz` on the backend. If the small set is wrong, fix
+the backend (restore data, correct `FIPS_AGENT_BACKEND_URL`). If it is right
+(you really did revoke most users), let the agent apply it with
+`AUTHZ_ALLOW_MASS_REVOKE=1` on the backend (marks full responses
+`force: true`) or `FIPS_AGENT_ALLOW_MASS_REVOKE=1` on that node, then unset it.
+
 ## Authorized client still gets the captive 302 (or blocked)
 
 **Cause 1 — no active entitlement.** The account exists but has no credit, or
