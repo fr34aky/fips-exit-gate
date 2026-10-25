@@ -26,6 +26,11 @@
   <span class="mono">{{.S.AttachedTo}}</span>: your traffic draws on <em>their</em> package, and packages you
   buy here stay unused until you switch back.</p>
   <form method="post" action="/whitelist/use-own"><button class="ghost">Use my own account instead</button></form>
+</div>{{else if .OwnerParked}}<div class="banner warn">
+  <span class="step">Your identity is not active on any account</span>
+  <p style="margin:.3rem 0 .6rem">It was attached elsewhere and that attachment ended. Re-activate it here so your
+  own packages apply.</p>
+  <form method="post" action="/whitelist/use-own"><button class="ghost">Use my own account</button></form>
 </div>{{end}}
 
 {{if .S.Invites}}<div class="banner">
@@ -122,7 +127,7 @@ on this same package. An invitation takes effect once that identity accepts it f
 {{range .S.Whitelist}}<tr>
   <td><div>{{if .Label}}{{.Label}}{{end}}</div><div class="mono muted">{{.Npub}}</div></td>
   <td>{{.Role}}</td>
-  <td>{{if .Pending}}<span class="pill">invited · awaiting acceptance</span>{{else if .Enabled}}<span class="pill on">enabled</span>{{else}}<span class="pill off">{{if eq .Role "owner"}}attached elsewhere{{else}}disabled{{end}}</span>{{end}}</td>
+  <td>{{if and .Pending .Enabled}}<span class="pill">invited · awaiting acceptance</span>{{else if .Enabled}}<span class="pill on">enabled</span>{{else}}<span class="pill off">{{if eq .Role "owner"}}parked{{else}}disabled{{end}}</span>{{end}}</td>
   <td>{{if ne .Role "owner"}}<form method="post" action="/whitelist/toggle">
       <input type="hidden" name="guest_npub" value="{{.Npub}}">
       <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">

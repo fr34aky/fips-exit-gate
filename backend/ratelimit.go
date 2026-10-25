@@ -15,6 +15,7 @@ type rateLimiter struct {
 	burst   float64
 	perSec  float64
 	now     func() time.Time
+	pruned  time.Time // last prune; a full scan at most once a minute
 }
 
 type bucket struct {
@@ -43,8 +44,9 @@ func (l *rateLimiter) allow(key string) bool {
 	now := l.now()
 	b, ok := l.buckets[key]
 	if !ok {
-		if len(l.buckets) > 10000 {
+		if len(l.buckets) > 10000 && now.Sub(l.pruned) > time.Minute {
 			l.prune(now)
+			l.pruned = now
 		}
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b

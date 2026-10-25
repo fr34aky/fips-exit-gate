@@ -392,13 +392,20 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 	// are on that very device.
 	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
 		onAccount := false
-		for _, w := range summary.Whitelist {
-			if w.Addr == src {
+		for _, entry := range summary.Whitelist {
+			if entry.Addr == src {
 				onAccount = true
 			}
 		}
 		if !onAccount {
 			data["ThisDevice"] = src.String()
+		}
+	}
+	// The owner row can be parked with nothing active for the address (host
+	// disabled the guest, support intervened): always offer the way back.
+	for _, entry := range summary.Whitelist {
+		if entry.Role == "owner" && !entry.Enabled {
+			data["OwnerParked"] = true
 		}
 	}
 	if clear, priv := p.pacLinks(r.Context()); clear != "" {
@@ -424,8 +431,13 @@ func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	guest := strings.TrimSpace(r.FormValue("guest_npub"))
-	if err := p.store.InviteGuest(r.Context(), npub, guest, strings.TrimSpace(r.FormValue("label"))); err != nil {
+	pending, err := p.store.InviteGuest(r.Context(), npub, guest, strings.TrimSpace(r.FormValue("label")))
+	if err != nil {
 		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
+	if !pending {
+		http.Redirect(w, r, "/dashboard?msg="+urlq("That identity is already active on your account (label updated)."), http.StatusSeeOther)
 		return
 	}
 	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
@@ -433,6 +445,8 @@ func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
 			if err := p.store.AcceptInvite(r.Context(), guest, npub); err == nil {
 				http.Redirect(w, r, "/dashboard?msg="+urlq("This device is now on your account."), http.StatusSeeOther)
 				return
+			} else {
+				log.Printf("portal: same-device accept for %s: %v", npub, err)
 			}
 		}
 	}
@@ -876,7 +890,7 @@ func friendlyErr(err error) string {
 	case store.ErrGuestLimit:
 		return "You have reached the maximum number of shared identities for this account."
 	case store.ErrNoActiveEntitlement:
-		return "Buy a package first — only accounts with an active package can share it."
+		return "That account has no active package right now — only accounts with an active package can share one."
 	case store.ErrSelfWhitelist:
 		return "That is this account's own identity."
 	case store.ErrInviteNotFound:

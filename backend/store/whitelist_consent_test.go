@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -41,7 +42,7 @@ func TestPendingInviteCannotHijackAnOwner(t *testing.T) {
 	ctx := context.Background()
 	attacker, victim := npubA, npubB
 	creditedAccount(t, st, attacker)
-	if err := st.InviteGuest(ctx, attacker, victim, "mark"); err != nil {
+	if _, err := st.InviteGuest(ctx, attacker, victim, "mark"); err != nil {
 		t.Fatal(err)
 	}
 	// Pending: the victim's address is NOT authorized through the attacker.
@@ -78,7 +79,7 @@ func TestInviteAcceptDeclineAndSwitchBack(t *testing.T) {
 	creditedAccount(t, st, host)
 	hostAcct, _ := st.GetAccountByNpub(ctx, host)
 
-	if err := st.InviteGuest(ctx, host, guest, "friend"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, guest, "friend"); err != nil {
 		t.Fatal(err)
 	}
 	inv, err := st.PendingInvites(ctx, guest)
@@ -137,7 +138,7 @@ func TestInviteAcceptDeclineAndSwitchBack(t *testing.T) {
 
 	// Re-inviting after the guest moved back needs consent again: the row is
 	// pending, the guest stays on their own account, and declining removes it.
-	if err := st.InviteGuest(ctx, host, guest, "again"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, guest, "again"); err != nil {
 		t.Fatal(err)
 	}
 	if inv, _ := st.PendingInvites(ctx, guest); len(inv) != 1 {
@@ -158,22 +159,135 @@ func TestInviteAcceptDeclineAndSwitchBack(t *testing.T) {
 		t.Fatalf("second decline: %v, want ErrInviteNotFound", err)
 	}
 
-	// Owner-side toggle: re-enabling a disabled guest whose address is active
-	// elsewhere becomes pending rather than violating the one-active-row rule.
+	// Owner-side toggle: disabling a PENDING row withdraws (deletes) it; a
+	// re-enable of a disabled ACCEPTED guest whose address is active elsewhere
+	// becomes pending rather than violating the one-active-row rule.
 	if err := st.AddWhitelist(ctx, host, guest, "admin"); err != ErrAddressInUse {
 		t.Fatalf("admin add while active elsewhere: %v, want ErrAddressInUse", err)
 	}
-	if err := st.InviteGuest(ctx, host, guest, "x"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, guest, "x"); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetWhitelistEnabled(ctx, host, guest, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetWhitelistEnabled(ctx, host, guest, true); err != nil {
-		t.Fatalf("re-enable while active elsewhere must not fail: %v", err)
+	if inv, _ := st.PendingInvites(ctx, guest); len(inv) != 0 {
+		t.Fatal("disabling a pending invitation should withdraw it")
 	}
-	if inv, _ := st.PendingInvites(ctx, guest); len(inv) != 1 {
-		t.Fatal("re-enabled guest row should be pending (consent needed)")
+	hostSum, _ := st.Summary(ctx, host)
+	for _, w := range hostSum.Whitelist {
+		if w.Npub == guest {
+			t.Fatal("withdrawn invitation row still present")
+		}
+	}
+}
+
+// Disabling an ACCEPTED guest (host toggle, or support) must hand the address
+// back to the guest's own account instead of leaving no active row at all.
+func TestDisablingAcceptedGuestReactivatesOwner(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	host, guest := npubA, npubB
+	creditedAccount(t, st, host)
+	creditedAccount(t, st, guest) // guest has their own package
+	guestAcct, _ := st.GetAccountByNpub(ctx, guest)
+	if _, err := st.InviteGuest(ctx, host, guest, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AcceptInvite(ctx, guest, host); err != nil {
+		t.Fatal(err)
+	}
+	if at, _ := st.AttachedTo(ctx, guestAcct.ID, guestAcct.FipsAddr); at != host {
+		t.Fatalf("attached to %q, want host", at)
+	}
+	if err := st.SetWhitelistEnabled(ctx, host, guest, false); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range mustFullSet(t, st) {
+		if m.Addr == addrOf(t, guest) {
+			found = true
+			if m.Account != guestAcct.ID {
+				t.Fatalf("after host disabled the guest, attributed to %s, want own account", m.Account)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("guest with own package left unauthorized after the host disabled them")
+	}
+	if at, _ := st.AttachedTo(ctx, guestAcct.ID, guestAcct.FipsAddr); at != "" {
+		t.Fatalf("still attached to %q", at)
+	}
+}
+
+// Accepting an invitation from a host whose package has lapsed must not park
+// the guest's own row for nothing.
+func TestAcceptRequiresHostEntitlement(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	host, guest := npubA, npubB
+	creditedAccount(t, st, host)
+	creditedAccount(t, st, guest)
+	if _, err := st.InviteGuest(ctx, host, guest, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.pool.Exec(ctx, `UPDATE entitlements e SET expires_at = now() - interval '1 hour'
+		FROM accounts a WHERE a.id = e.account_id AND a.npub = $1`, host); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AcceptInvite(ctx, guest, host); err != ErrNoActiveEntitlement {
+		t.Fatalf("accept of a lapsed host: %v, want ErrNoActiveEntitlement", err)
+	}
+	if !setContains(mustFullSet(t, st), addrOf(t, guest)) {
+		t.Fatal("guest lost their own authorization by accepting a dead invitation")
+	}
+}
+
+// An uppercase (or otherwise non-normalized) npub is the same identity.
+func TestNpubNormalizationBlocksSelfInvite(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	creditedAccount(t, st, npubA)
+	if _, err := st.InviteGuest(ctx, npubA, strings.ToUpper(npubA), "me"); err != ErrSelfWhitelist {
+		t.Fatalf("uppercase self-invite: %v, want ErrSelfWhitelist", err)
+	}
+	acct, err := st.GetAccountByNpub(ctx, strings.ToUpper(npubA))
+	if err != nil || acct.Npub != npubA {
+		t.Fatalf("uppercase lookup: %+v %v", acct, err)
+	}
+	if _, err := st.CreateAccount(ctx, strings.ToUpper(npubA)); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = st.pool.QueryRow(ctx, `SELECT count(*) FROM accounts`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("uppercase npub created a second account (%d accounts)", n)
+	}
+}
+
+// Re-running a grant for the same purchase (processing -> settled) must not
+// pull an address back from an account the user attached to in between.
+func TestResettleDoesNotYankAddressHome(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	host, buyer := npubA, npubB
+	creditedAccount(t, st, host)
+	pid, _ := buyPackage(t, st, buyer, "inv_resettle")
+	if err := st.SettlePurchase(ctx, pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InviteGuest(ctx, host, buyer, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AcceptInvite(ctx, buyer, host); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SettlePurchase(ctx, pid); err != nil { // idempotent re-settle
+		t.Fatal(err)
+	}
+	buyerAcct, _ := st.GetAccountByNpub(ctx, buyer)
+	if at, _ := st.AttachedTo(ctx, buyerAcct.ID, buyerAcct.FipsAddr); at != host {
+		t.Fatalf("re-settle moved the buyer off the host account (attached to %q)", at)
 	}
 }
 
@@ -184,26 +298,36 @@ func TestInviteGuards(t *testing.T) {
 	if _, err := st.CreateAccount(ctx, host); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.InviteGuest(ctx, host, npubB, ""); err != ErrNoActiveEntitlement {
+	if _, err := st.InviteGuest(ctx, host, npubB, ""); err != ErrNoActiveEntitlement {
 		t.Fatalf("invite without a package: %v, want ErrNoActiveEntitlement", err)
 	}
 	creditedAccount(t, st, host)
-	if err := st.InviteGuest(ctx, host, host, ""); err != ErrSelfWhitelist {
+	if _, err := st.InviteGuest(ctx, host, host, ""); err != ErrSelfWhitelist {
 		t.Fatalf("self invite: %v, want ErrSelfWhitelist", err)
 	}
 	st.MaxGuests = 2
-	if err := st.InviteGuest(ctx, host, npubB, "1"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, npubB, "1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.InviteGuest(ctx, host, npubG, "2"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, npubG, "2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.InviteGuest(ctx, host, npubH, "3"); err != ErrGuestLimit {
+	if _, err := st.InviteGuest(ctx, host, npubH, "3"); err != ErrGuestLimit {
 		t.Fatalf("third guest with cap 2: %v, want ErrGuestLimit", err)
 	}
-	// Re-inviting an existing guest does not count against the cap.
-	if err := st.InviteGuest(ctx, host, npubB, "relabel"); err != nil {
+	// Re-inviting an existing guest does not count against the cap, and a
+	// withdrawn invitation frees its slot.
+	if _, err := st.InviteGuest(ctx, host, npubB, "relabel"); err != nil {
 		t.Fatalf("re-invite existing guest: %v", err)
+	}
+	if err := st.WithdrawInvite(ctx, host, npubG); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InviteGuest(ctx, host, npubH, "3 again"); err != nil {
+		t.Fatalf("slot not freed by withdraw: %v", err)
+	}
+	if err := st.WithdrawInvite(ctx, host, npubH); err != nil {
+		t.Fatal(err)
 	}
 	// Admin path stays immediate and uncapped (operator support).
 	if err := st.AddWhitelist(ctx, host, npubH, "admin-added"); err != nil {
@@ -219,7 +343,7 @@ func TestInspectShowsConflicts(t *testing.T) {
 	ctx := context.Background()
 	host, guest := npubA, npubB
 	creditedAccount(t, st, host)
-	if err := st.InviteGuest(ctx, host, guest, "x"); err != nil {
+	if _, err := st.InviteGuest(ctx, host, guest, "x"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateAccount(ctx, guest); err != nil {

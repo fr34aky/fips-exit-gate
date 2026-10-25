@@ -220,10 +220,11 @@ account with `authorized`/`authz_account`, competing rows on other accounts
 
 - `attached_to` is set: the user accepted someone else's invitation, so their
   address is attributed to that account and their own packages sit unused.
-  Buying a package normally switches them back automatically; the dashboard
-  also offers "Use my own account instead". From the admin side,
+  Buying a package switches them back automatically; the dashboard also
+  offers "Use my own account instead". From the admin side,
   `POST /admin/whitelist {"owner_npub":"<host>","guest_npub":"<npub>","enabled":false}`
-  then have the user press that button (or buy again).
+  disables the guest row and hands the address back to the user's own account
+  in the same step.
 - The owner row shows a conflict that is `pending`: harmless, someone invited
   them; pending rows never affect authorization.
 - `authorized: false` with an active entitlement and no conflicts: the agent

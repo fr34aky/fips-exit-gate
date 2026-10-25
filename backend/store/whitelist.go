@@ -5,10 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 	"github.com/jackc/pgx/v5"
 )
+
+// normNpub canonicalizes an npub for storage and comparison: bech32 is
+// case-insensitive, so "NPUB1…" and "npub1…" are the same key and must map to
+// the same rows (otherwise an uppercase self-invite slips past the identity
+// check and a second account appears for the same person).
+func normNpub(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 // Whitelist model
 //
@@ -52,21 +59,24 @@ func (s *Store) maxGuests() int {
 
 // InviteGuest is the portal's "add a device or person": it creates a PENDING
 // guest row that the invited npub must accept. Requires an active entitlement
-// on the inviting account and respects the per-account guest cap. Re-inviting
-// an existing guest leaves an active row alone and puts any other (withdrawn,
-// disabled, moved away) row back to pending: attaching an identity always
-// needs that identity's say-so.
-func (s *Store) InviteGuest(ctx context.Context, ownerNpub, guestNpub, label string) error {
-	if ownerNpub == guestNpub {
-		return ErrSelfWhitelist
-	}
+// on the inviting account and respects the per-account guest cap (enabled
+// rows). Re-inviting an existing guest leaves an active row alone (label
+// refreshed) and puts any other (disabled, moved away) row back to pending:
+// attaching an identity always needs that identity's say-so. pending reports
+// whether an acceptance is now outstanding (false = the guest is already
+// active on this account).
+func (s *Store) InviteGuest(ctx context.Context, ownerNpub, guestNpub, label string) (pending bool, err error) {
+	guestNpub = normNpub(guestNpub)
 	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
 	if err != nil {
-		return err
+		return false, err
 	}
 	addr, err := fipsaddr.FromNpub(guestNpub)
 	if err != nil {
-		return fmt.Errorf("store: derive guest address: %w", err)
+		return false, fmt.Errorf("store: derive guest address: %w", err)
+	}
+	if addr == acct.FipsAddr {
+		return false, ErrSelfWhitelist
 	}
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		var active bool
@@ -88,33 +98,54 @@ func (s *Store) InviteGuest(ctx context.Context, ownerNpub, guestNpub, label str
 		if !exists {
 			var n int
 			if err := tx.QueryRow(ctx,
-				`SELECT count(*) FROM whitelist_entries WHERE account_id = $1 AND role = 'guest'`, acct.ID).Scan(&n); err != nil {
+				`SELECT count(*) FROM whitelist_entries WHERE account_id = $1 AND role = 'guest' AND enabled`, acct.ID).Scan(&n); err != nil {
 				return err
 			}
 			if n >= s.maxGuests() {
 				return ErrGuestLimit
 			}
 		}
-		_, err := tx.Exec(ctx,
+		return tx.QueryRow(ctx,
 			`INSERT INTO whitelist_entries(account_id, npub, fips_addr, role, label, enabled, pending)
 			 VALUES ($1, $2, $3::inet, 'guest', $4, true, true)
 			 ON CONFLICT (account_id, npub) DO UPDATE
 			   SET label = EXCLUDED.label, enabled = true,
-			       pending = NOT (whitelist_entries.enabled AND NOT whitelist_entries.pending)`,
-			acct.ID, guestNpub, addr.String(), label)
-		return err
+			       pending = NOT (whitelist_entries.enabled AND NOT whitelist_entries.pending)
+			 RETURNING pending`,
+			acct.ID, guestNpub, addr.String(), label).Scan(&pending)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Pending rows never authorize anything, but a re-enable of an accepted
 	// guest does; recompute either way (cheap, serialized).
 	_, _, err = s.RecomputeAuthz(ctx)
-	return err
+	return pending, err
+}
+
+// WithdrawInvite deletes a still-pending invitation from the owner's side, so
+// it stops counting and the guest no longer sees it. Returns ErrInviteNotFound
+// for accepted (or unknown) rows; those are disabled with SetWhitelistEnabled.
+func (s *Store) WithdrawInvite(ctx context.Context, ownerNpub, guestNpub string) error {
+	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM whitelist_entries WHERE account_id = $1 AND npub = $2 AND role = 'guest' AND pending`,
+		acct.ID, normNpub(guestNpub))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInviteNotFound
+	}
+	return nil
 }
 
 // PendingInvites lists invitations waiting for guestNpub's decision.
 func (s *Store) PendingInvites(ctx context.Context, guestNpub string) ([]Invite, error) {
+	guestNpub = normNpub(guestNpub)
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.npub, host(a.fips_addr), COALESCE(w.label, ''), a.id::text
 		 FROM whitelist_entries w JOIN accounts a ON a.id = w.account_id
@@ -141,20 +172,33 @@ func (s *Store) PendingInvites(ctx context.Context, guestNpub string) ([]Invite,
 // pending row becomes the address's one active row, and whatever row was
 // active for that address before (the guest's own owner row, or an accepted
 // invite elsewhere) is parked (disabled, not deleted) so it can be re-activated
-// later.
+// later. The host must still have an active package: accepting a stale
+// invitation would otherwise park a paying guest's own row for nothing.
 func (s *Store) AcceptInvite(ctx context.Context, guestNpub, hostNpub string) error {
+	guestNpub, hostNpub = normNpub(guestNpub), normNpub(hostNpub)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		var id, addr string
+		var id, addr, hostID string
 		err := tx.QueryRow(ctx,
-			`SELECT w.id::text, host(w.fips_addr)
+			`SELECT w.id::text, host(w.fips_addr), a.id::text
 			 FROM whitelist_entries w JOIN accounts a ON a.id = w.account_id
 			 WHERE w.npub = $1 AND a.npub = $2 AND w.pending AND w.enabled AND w.role = 'guest'
-			 FOR UPDATE OF w`, guestNpub, hostNpub).Scan(&id, &addr)
+			   AND a.status = 'active'
+			 FOR UPDATE OF w`, guestNpub, hostNpub).Scan(&id, &addr, &hostID)
 		if err == pgx.ErrNoRows {
 			return ErrInviteNotFound
 		}
 		if err != nil {
 			return err
+		}
+		var active bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM entitlements WHERE account_id = $1
+			   AND now() >= starts_at AND now() <= expires_at
+			   AND (kind = 'time' OR volume_used < volume_bytes))`, hostID).Scan(&active); err != nil {
+			return err
+		}
+		if !active {
+			return ErrNoActiveEntitlement
 		}
 		return activateRowTx(ctx, tx, id, addr)
 	})
@@ -167,6 +211,7 @@ func (s *Store) AcceptInvite(ctx context.Context, guestNpub, hostNpub string) er
 
 // DeclineInvite removes a pending invitation.
 func (s *Store) DeclineInvite(ctx context.Context, guestNpub, hostNpub string) error {
+	guestNpub, hostNpub = normNpub(guestNpub), normNpub(hostNpub)
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM whitelist_entries w USING accounts a
 		 WHERE a.id = w.account_id AND w.npub = $1 AND a.npub = $2 AND w.pending AND w.role = 'guest'`,
@@ -195,6 +240,26 @@ func (s *Store) ActivateOwner(ctx context.Context, npub string) error {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)
+	return err
+}
+
+// reactivateOwnerIfOrphanTx: when the row that was active for addr has just
+// been parked or removed and nothing else is active for it, the address's
+// owner row (if any) becomes active again, so a guest disabled by their host
+// (or by support) falls back to their own account instead of to nothing.
+func reactivateOwnerIfOrphanTx(ctx context.Context, tx pgx.Tx, addr string) error {
+	var active bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled AND NOT pending)`,
+		addr).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return nil
+	}
+	_, err := tx.Exec(ctx,
+		`UPDATE whitelist_entries SET enabled = true, pending = false
+		 WHERE fips_addr = $1::inet AND role = 'owner'`, addr)
 	return err
 }
 
@@ -283,7 +348,7 @@ func (s *Store) Inspect(ctx context.Context, npub string) (AccountInspection, er
 	if err != nil {
 		return AccountInspection{}, err
 	}
-	out := AccountInspection{Account: sum.Account, Entitlements: sum.Entitlements, Attached: sum.AttachedTo}
+	out := AccountInspection{Account: sum.Account, Entitlements: sum.Entitlements, Attached: sum.AttachedTo, Invites: sum.Invites}
 	for _, w := range sum.Whitelist {
 		e := InspectedEntry{Npub: w.Npub, Addr: w.Addr.String(), Role: w.Role, Label: w.Label, Enabled: w.Enabled, Pending: w.Pending}
 		var owner *string
@@ -316,10 +381,5 @@ func (s *Store) Inspect(ctx context.Context, npub string) (AccountInspection, er
 		}
 		out.Whitelist = append(out.Whitelist, e)
 	}
-	inv, err := s.PendingInvites(ctx, npub)
-	if err != nil {
-		return out, err
-	}
-	out.Invites = inv
 	return out, nil
 }

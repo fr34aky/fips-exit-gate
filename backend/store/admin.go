@@ -23,6 +23,7 @@ var (
 // CreateAccount creates (or returns) the account for an npub, plus its owner
 // whitelist entry, then recomputes authz.
 func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error) {
+	npub = normNpub(npub)
 	addr, err := fipsaddr.FromNpub(npub)
 	if err != nil {
 		return Account{}, fmt.Errorf("store: derive address: %w", err)
@@ -62,6 +63,7 @@ func (s *Store) CreateAccount(ctx context.Context, npub string) (Account, error)
 
 // GetAccountByNpub loads an account.
 func (s *Store) GetAccountByNpub(ctx context.Context, npub string) (Account, error) {
+	npub = normNpub(npub)
 	var a Account
 	var addr string
 	err := s.pool.QueryRow(ctx,
@@ -81,6 +83,7 @@ func (s *Store) GetAccountByNpub(ctx context.Context, npub string) (Account, err
 // ACCEPTED immediately. This is the operator path (admin API, support): the
 // portal uses InviteGuest, which requires the guest's consent.
 func (s *Store) AddWhitelist(ctx context.Context, ownerNpub, guestNpub, label string) error {
+	guestNpub = normNpub(guestNpub)
 	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
 	if err != nil {
 		return err
@@ -107,20 +110,49 @@ func (s *Store) AddWhitelist(ctx context.Context, ownerNpub, guestNpub, label st
 // SetWhitelistEnabled toggles a guest entry. Re-enabling a guest whose address
 // has meanwhile become active on another account (typically their own) makes
 // the row pending again instead of silently pulling the address back: that
-// move needs the guest's consent.
+// move needs the guest's consent. Disabling a still-pending invitation deletes
+// it (nothing to keep), and disabling an accepted guest hands the address back
+// to the guest's own account if they have one, so they are never left with no
+// active row at all.
 func (s *Store) SetWhitelistEnabled(ctx context.Context, ownerNpub, guestNpub string, enabled bool) error {
+	guestNpub = normNpub(guestNpub)
 	acct, err := s.GetAccountByNpub(ctx, ownerNpub)
 	if err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE whitelist_entries w SET enabled = $3,
-		   pending = CASE WHEN $3 AND w.role = 'guest' AND NOT w.enabled AND EXISTS (
-		                SELECT 1 FROM whitelist_entries o
-		                WHERE o.fips_addr = w.fips_addr AND o.id <> w.id AND o.enabled AND NOT o.pending)
-		             THEN true ELSE w.pending END
-		 WHERE account_id = $1 AND npub = $2`,
-		acct.ID, guestNpub, enabled); err != nil {
+	if err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if !enabled {
+			tag, err := tx.Exec(ctx,
+				`DELETE FROM whitelist_entries WHERE account_id = $1 AND npub = $2 AND role = 'guest' AND pending`,
+				acct.ID, guestNpub)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() > 0 {
+				return nil // withdrawn invitation; nothing was active
+			}
+		}
+		var addr string
+		err := tx.QueryRow(ctx,
+			`UPDATE whitelist_entries w SET enabled = $3,
+			   pending = CASE WHEN $3 AND w.role = 'guest' AND NOT w.enabled AND EXISTS (
+			                SELECT 1 FROM whitelist_entries o
+			                WHERE o.fips_addr = w.fips_addr AND o.id <> w.id AND o.enabled AND NOT o.pending)
+			             THEN true ELSE w.pending END
+			 WHERE account_id = $1 AND npub = $2
+			 RETURNING host(fips_addr)`,
+			acct.ID, guestNpub, enabled).Scan(&addr)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return reactivateOwnerIfOrphanTx(ctx, tx, addr)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	_, _, err = s.RecomputeAuthz(ctx)
