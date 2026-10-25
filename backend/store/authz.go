@@ -2,22 +2,41 @@ package store
 
 import (
 	"context"
+	"errors"
+	"log"
 	"net/netip"
+	"strconv"
+	"time"
 
+	"github.com/fr34aky/fips-exit-gate/pkg/authzhash"
 	"github.com/jackc/pgx/v5"
 )
+
+// authzLockKey serializes RecomputeAuthz across backend processes. Without it
+// two concurrent recomputes (usage ingest, a webhook, a login) could take
+// revision numbers in one order and COMMIT in the other, so an agent that read
+// max(rev)=11 before rev 10 became visible would advance its cursor past 10
+// and never receive it. Holding a transaction-scoped advisory lock across the
+// whole recompute makes revision numbers monotonic in commit order.
+const authzLockKey int64 = 0x66697073_61757468 // "fipsauth"
+
+// AuthzChannel is the Postgres NOTIFY channel pinged (with the new revision as
+// payload) whenever RecomputeAuthz appends revisions, so API long-polls can
+// wake immediately instead of polling max(rev).
+const AuthzChannel = "fips_authz"
 
 // The authorized set is GLOBAL (any authorized address may use any exit node).
 // It is materialized in authz_current and every change is appended to
 // authz_revisions, whose max(rev) is the global revision the agents poll.
 
 // desiredSQL selects the addresses that SHOULD be authorized right now: every
-// enabled whitelist entry of an active account that has an active entitlement.
+// enabled, accepted (not pending) whitelist entry of an active account that
+// has an active entitlement.
 const desiredSQL = `
 SELECT host(w.fips_addr), w.account_id::text
 FROM whitelist_entries w
 JOIN accounts a ON a.id = w.account_id
-WHERE w.enabled AND a.status = 'active'
+WHERE w.enabled AND NOT w.pending AND a.status = 'active'
   AND EXISTS (
     SELECT 1 FROM entitlements e
     WHERE e.account_id = w.account_id
@@ -30,6 +49,9 @@ WHERE w.enabled AND a.status = 'active'
 // pass (used as inline usage-ack revocations) and the new global revision.
 func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev int64, err error) {
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, authzLockKey); err != nil {
+			return err
+		}
 		desired, err := scanAddrAccount(ctx, tx, desiredSQL)
 		if err != nil {
 			return err
@@ -38,10 +60,17 @@ func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev i
 		if err != nil {
 			return err
 		}
+		changed := false
 		for addr, acct := range desired {
-			if _, ok := current[addr]; ok {
+			if cur, ok := current[addr]; ok && cur == acct {
 				continue
 			}
+			// New member, or a member whose attribution moved to another account
+			// (a guest accepted an invitation, or switched back to their own
+			// account) while staying authorized. Record the move too: usage is
+			// billed to authz_current's account, and the revision log's account
+			// is what late-usage attribution falls back to. Agents only see an
+			// idempotent re-add.
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO authz_current(fips_addr, account_id) VALUES ($1::inet, $2)
 				 ON CONFLICT (fips_addr) DO UPDATE SET account_id = EXCLUDED.account_id`, addr, acct); err != nil {
@@ -51,6 +80,7 @@ func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev i
 				`INSERT INTO authz_revisions(op, fips_addr, account_id) VALUES ('add', $1::inet, $2)`, addr, acct); err != nil {
 				return err
 			}
+			changed = true
 		}
 		for addr, acct := range current {
 			if _, ok := desired[addr]; ok {
@@ -66,10 +96,67 @@ func (s *Store) RecomputeAuthz(ctx context.Context) (removed []netip.Addr, rev i
 			if a, e := netip.ParseAddr(addr); e == nil {
 				removed = append(removed, a)
 			}
+			changed = true
 		}
-		return tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev)
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev); err != nil {
+			return err
+		}
+		if changed {
+			// Delivered on COMMIT, so listeners never see the revision before
+			// the rows that carry it.
+			if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, AuthzChannel, strconv.FormatInt(rev, 10)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return removed, rev, err
+}
+
+// ListenAuthz holds a dedicated connection LISTENing on AuthzChannel and calls
+// onChange for every notification until ctx ends. It also calls onChange once
+// per (re)connect, so a waiter re-checks the revision after any gap in which a
+// notification could have been missed. Callers keep a slow poll as a backstop;
+// this only makes the common case immediate.
+func (s *Store) ListenAuthz(ctx context.Context, onChange func()) {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		started := time.Now()
+		err := s.listenOnce(ctx, onChange)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(started) > time.Minute {
+			backoff = time.Second // a healthy session resets the ladder
+		}
+		log.Printf("store: authz listener: %v (reconnecting in %s)", err, backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func (s *Store) listenOnce(ctx context.Context, onChange func()) error {
+	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, `LISTEN `+AuthzChannel); err != nil {
+		return err
+	}
+	onChange()
+	for {
+		if _, err := conn.WaitForNotification(ctx); err != nil {
+			return err
+		}
+		onChange()
+	}
 }
 
 // CurrentRev returns the global authz revision.
@@ -106,20 +193,63 @@ func (s *Store) FullSet(ctx context.Context) ([]AuthzMember, int64, error) {
 	return out, rev, nil
 }
 
-// AuthzStatus returns the current authorized-set size and revision, read in one
-// snapshot so a node heartbeat can reliably compare its live kernel set against
-// the backend at a consistent point. A size mismatch at an equal revision means
-// the node's set has drifted out-of-band (e.g. an nftables flush) — the caller
-// uses this to ask the node to force a full reconcile.
-func (s *Store) AuthzStatus(ctx context.Context) (count int, rev int64, err error) {
+// AuthzStatus returns the current authorized-set size, its authzhash
+// fingerprint and the revision, read in one snapshot so a node heartbeat can
+// reliably compare its live kernel set against the backend at a consistent
+// point. A fingerprint (or, for older agents, size) mismatch at an equal
+// revision means the node's set has drifted out-of-band (e.g. an nftables
+// flush) — the caller uses this to ask the node to force a full reconcile.
+//
+// The fingerprint can only change when the revision changes, so the result is
+// memoized per revision: a fleet heartbeating every minute costs one scan per
+// revision change, not one per heartbeat.
+func (s *Store) AuthzStatus(ctx context.Context) (count int, hash string, rev int64, err error) {
+	if rev, err = s.CurrentRev(ctx); err != nil {
+		return 0, "", 0, err
+	}
+	s.statusMu.Lock()
+	if s.statusCache.rev == rev && s.statusCache.hash != "" {
+		c := s.statusCache
+		s.statusMu.Unlock()
+		return c.count, c.hash, rev, nil
+	}
+	s.statusMu.Unlock()
 	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(rev), 0) FROM authz_revisions`).Scan(&rev); err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx, `SELECT count(*) FROM authz_current`).Scan(&count)
+		m, err := scanAddrAccount(ctx, tx, `SELECT host(fips_addr), account_id::text FROM authz_current`)
+		if err != nil {
+			return err
+		}
+		addrs := make([]netip.Addr, 0, len(m))
+		for addr := range m {
+			if a, e := netip.ParseAddr(addr); e == nil {
+				addrs = append(addrs, a)
+			}
+		}
+		count, hash = len(addrs), authzhash.Of(addrs)
+		return nil
 	})
-	return count, rev, err
+	if err == nil {
+		s.statusMu.Lock()
+		s.statusCache = authzStatus{rev: rev, count: count, hash: hash}
+		s.statusMu.Unlock()
+	}
+	return count, hash, rev, err
 }
+
+// authzStatus is the memoized AuthzStatus result for one revision.
+type authzStatus struct {
+	rev   int64
+	count int
+	hash  string
+}
+
+// ErrCompacted is returned by DeltaSince when the log no longer reaches back
+// to the client's cursor (CompactAuthzRevisions ran); the caller sends a full
+// set instead.
+var ErrCompacted = errors.New("store: revision log compacted past the client's cursor")
 
 // DeltaSince returns the net add/del since clientRev by replaying the revision
 // log (so an add-then-del of the same address collapses correctly). The rows
@@ -128,6 +258,15 @@ func (s *Store) AuthzStatus(ctx context.Context) (count int, rev int64, err erro
 // cursor past a change it wasn't handed and skips it permanently.
 func (s *Store) DeltaSince(ctx context.Context, clientRev int64) (add []AuthzMember, del []netip.Addr, rev int64, err error) {
 	err = s.readTxRR(ctx, func(tx pgx.Tx) error {
+		// Every revision above the cursor must still exist; otherwise a delta
+		// would silently miss the compacted ones.
+		var minRev int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(min(rev), 0) FROM authz_revisions`).Scan(&minRev); err != nil {
+			return err
+		}
+		if minRev > 0 && clientRev+1 < minRev {
+			return ErrCompacted
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT op, host(fips_addr), account_id::text FROM authz_revisions WHERE rev > $1 ORDER BY rev`, clientRev)
 		if err != nil {

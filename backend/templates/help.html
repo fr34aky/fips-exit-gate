@@ -21,7 +21,7 @@ traffic uses.</p>
 <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
   <div>
     <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard, fastest way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network, so your traffic blends in with other Tor users. A little slower, and it uses more of your data.{{else}}Egress service.{{end}}</div>
+    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard, fastest way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network, so your traffic blends in with other Tor users. A little slower, and it uses more of your data.{{else if eq .Key "wg"}}A WireGuard tunnel for the whole device: no proxy settings, every app, IPv4/IPv6/UDP. Create a configuration on your dashboard. Metering includes the tunnel's small overhead.{{else}}Egress service.{{end}}</div>
   </div>
   <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
 </div></div>
@@ -75,6 +75,18 @@ by default. You'll also find these on your <a href="/dashboard">dashboard</a>.</
 {{else}}
 Ask your operator for the PAC URL, then set it as your browser's automatic proxy configuration URL.
 {{end}}</div></details>
+
+<details class="faq"><summary>Can I send <em>all</em> my device's traffic through the exit, not just the browser?</summary>
+<div>Yes, with a small client-side tunnel (tun2socks on Linux, a SOCKS-tunnel VPN app on Android): it turns every
+connection on the device into a connection to the same exit port, so nothing else changes — same package, same
+billing, same sign-in page when you're out of credit. Your operator can point you at the setup guide
+(<span class="mono">docs/client-tunnel.md</span> in the exit's repository). Note that only TCP crosses the exit;
+use a DNS-over-TLS resolver, and UDP apps won't work in this mode.</div></details>
+<details class="faq"><summary>My WireGuard tunnel shows no handshake.</summary>
+<div>The exit only answers WireGuard from identities with an active package, from the fips node the configuration
+was issued to. Check your package on the <a href="/dashboard">dashboard</a> — it still loads over fips while the
+tunnel is up, because <span class="mono">.fips</span> traffic never enters the tunnel — and top up if needed; the
+tunnel connects on its next retry, no restart needed.</div></details>
 
 <details class="faq"><summary>Can I reach .onion sites?</summary>
 <div>Yes — the Connectivity service reaches <span class="mono">.onion</span> addresses on the same connection,

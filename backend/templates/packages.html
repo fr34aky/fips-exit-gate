@@ -9,6 +9,8 @@
 <p class="muted">Pick a bundle below. It's tied to your nostr identity and shared across any devices you
 whitelist. Pay in Bitcoin — <strong>Lightning unlocks instantly</strong>.</p>
 
+{{if eq .Err "limit"}}<div class="banner warn"><p style="margin:0">Too many purchases in a short time, or too many unpaid invoices open on this account. Pay or wait for one to expire, then try again.</p></div>
+{{else if .Err}}<div class="banner warn"><p style="margin:0">That purchase could not be started. Please try again.</p></div>{{end}}
 {{if .Pending}}<div class="banner warn"><strong>Purchase recorded — waiting for payment.</strong>
   <p class="muted" style="margin:.3rem 0 0">It activates automatically once paid. Track it under
   <a href="/dashboard">pending payments</a> on your dashboard.</p></div>{{end}}
@@ -34,7 +36,7 @@ through — each counts your traffic at its own rate.</p>
 <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
   <div>
     <div><strong>{{.Name}}</strong></div>
-    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else}}Egress service.{{end}}</div>
+    <div class="muted">{{if eq .Key "clearnet"}}The clear Internet and <span class="mono">.onion</span> sites — the standard way to browse.{{else if eq .Key "tor"}}Everything routed through the Tor network for extra privacy.{{else if eq .Key "wg"}}WireGuard: the whole device through the exit, no proxy settings.{{else}}Egress service.{{end}}</div>
   </div>
   <div style="text-align:right"><div class="price">{{rate .RatePPM}}</div><div class="muted" style="font-size:.76em">data rate</div></div>
 </div></div>

@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
 // backendClient talks to the fips-exit backend API (docs/api-agent-backend.md).
@@ -17,6 +22,37 @@ type backendClient struct {
 	httpc     *http.Client
 	authToken string // empty until enrolled
 	nodeID    string
+}
+
+// checkBackendURL enforces the transport rule for the agent<->backend
+// channel: https anywhere, or plain http only where the path is already
+// confidential and authenticated — loopback, a fips address (the mesh
+// encrypts end to end), or a .fips name. Anything else needs
+// FIPS_AGENT_ALLOW_INSECURE=1, because the bearer token would cross the
+// Internet in the clear.
+func checkBackendURL(raw string, allowInsecure bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" || strings.HasSuffix(host, ".fips") {
+			return nil
+		}
+		if ip, err := netip.ParseAddr(host); err == nil && (ip.IsLoopback() || fipsaddr.Valid(ip)) {
+			return nil
+		}
+		if allowInsecure {
+			return nil
+		}
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL %q is plain http to a non-fips, non-loopback host: the node token would cross the network unencrypted; use https:// or set FIPS_AGENT_ALLOW_INSECURE=1 knowingly", raw)
+	default:
+		return fmt.Errorf("FIPS_AGENT_BACKEND_URL %q: scheme must be https:// or http://", raw)
+	}
 }
 
 func newBackendClient(baseURL string) *backendClient {
@@ -83,14 +119,18 @@ func (c *backendClient) enroll(ctx context.Context, req enrollRequest) (enrollRe
 }
 
 // getAuthz issues the long-poll sync. wait is the max seconds the server may
-// hold the request; rev is the last applied revision. Returns errUnchanged on
-// a 204.
-func (c *backendClient) getAuthz(ctx context.Context, rev int64, wait int) (authzResponse, error) {
+// hold the request; rev is the last applied revision; full asks for the
+// complete set immediately (even at backend revision 0) instead of a delta or
+// a long-poll. Returns errUnchanged on a 204.
+func (c *backendClient) getAuthz(ctx context.Context, rev int64, wait int, full bool) (authzResponse, error) {
 	// Client-side deadline slightly beyond the server hold.
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(wait+10)*time.Second)
 	defer cancel()
 	path := "/v1/nodes/" + c.nodeID + "/authz?rev=" + strconv.FormatInt(rev, 10) +
 		"&wait=" + strconv.Itoa(wait)
+	if full {
+		path += "&full=1"
+	}
 	var out authzResponse
 	status, err := c.do(ctx, http.MethodGet, path, nil, &out)
 	if err != nil {
@@ -108,6 +148,22 @@ func (c *backendClient) postUsage(ctx context.Context, report usageReport) (usag
 	var out usageAck
 	_, err := c.do(ctx, http.MethodPost, "/v1/nodes/"+c.nodeID+"/usage", report, &out)
 	return out, err
+}
+
+// getWgPeers fetches the WireGuard peer table; errUnchanged on a 204 for the
+// given etag.
+func (c *backendClient) getWgPeers(ctx context.Context, etag string) (wgPeersResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var out wgPeersResponse
+	status, err := c.do(ctx, http.MethodGet, "/v1/nodes/"+c.nodeID+"/wg?etag="+url.QueryEscape(etag), nil, &out)
+	if err != nil {
+		return wgPeersResponse{}, err
+	}
+	if status == http.StatusNoContent {
+		return wgPeersResponse{}, errUnchanged
+	}
+	return out, nil
 }
 
 func (c *backendClient) heartbeat(ctx context.Context, req heartbeatRequest) (heartbeatResponse, error) {

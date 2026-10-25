@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +19,15 @@ var migrationsFS embed.FS
 // Store wraps a pgx connection pool.
 type Store struct {
 	pool *pgxpool.Pool
+
+	statusMu    sync.Mutex
+	statusCache authzStatus // AuthzStatus memo, keyed by revision
+	// MaxGuests caps guest invitations per account (0 = DefaultMaxGuests).
+	MaxGuests int
+	// WireGuard: inner address plan and per-identity peer cap (zero values =
+	// DefaultWgPools / DefaultMaxWgPeersPerAddr).
+	WgPools           WgPools
+	MaxWgPeersPerAddr int
 }
 
 // Open connects to Postgres and applies pending migrations.
@@ -40,16 +50,11 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
-// migrate applies embedded .sql files in lexical order, tracked in a table.
-func (s *Store) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`)
-	if err != nil {
-		return fmt.Errorf("store: migrations table: %w", err)
-	}
+// migrationNames lists the embedded migration files in apply order.
+func migrationNames() ([]string, error) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -58,6 +63,52 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	sort.Strings(names)
+	return names, nil
+}
+
+// Ready reports whether the database answers and every embedded migration
+// has been applied — the readiness check for /readyz. One round trip: the
+// applied versions are read in a single query and diffed here.
+func (s *Store) Ready(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("db: %w", err)
+	}
+	defer rows.Close()
+	applied := map[string]bool{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return err
+		}
+		applied[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	names, err := migrationNames()
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if !applied[n] {
+			return fmt.Errorf("migration %s not applied", n)
+		}
+	}
+	return nil
+}
+
+// migrate applies embedded .sql files in lexical order, tracked in a table.
+func (s *Store) migrate(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`)
+	if err != nil {
+		return fmt.Errorf("store: migrations table: %w", err)
+	}
+	names, err := migrationNames()
+	if err != nil {
+		return err
+	}
 	for _, name := range names {
 		var exists bool
 		if err := s.pool.QueryRow(ctx,

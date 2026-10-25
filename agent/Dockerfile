@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X github.com/fr
 
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nftables ca-certificates \
+    && apt-get install -y --no-install-recommends nftables wireguard-tools ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/agent /usr/local/bin/fips-exit-agent
 ENTRYPOINT ["/usr/local/bin/fips-exit-agent"]

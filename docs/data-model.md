@@ -20,13 +20,22 @@ whitelist_entries        -- npubs allowed to consume the account's packages
   fips_addr     inet not null             -- derived
   role          owner|guest               -- owner row auto-created with account
   enabled       bool default true
+  pending       bool default false        -- guest invitation not yet accepted by
+                                          -- the invited npub; a pending row never
+                                          -- authorizes, resolves a source, or
+                                          -- occupies the address
   label         text                      -- user-facing note ("laptop", "alice")
   created_at
   unique (account_id, npub)
-  unique (fips_addr) where enabled        -- an address may be active on at
-                                          -- most ONE account at a time; this
-                                          -- is what makes source-address →
-                                          -- account resolution deterministic
+  unique (fips_addr) where enabled and not pending
+                                          -- an address may be ACTIVE on at most
+                                          -- ONE account at a time; this is what
+                                          -- makes source-address → account
+                                          -- resolution deterministic. Accepting
+                                          -- an invitation parks the other active
+                                          -- row (usually the guest's own owner
+                                          -- row); buying a package on your own
+                                          -- account activates your owner row.
 ```
 
 If npub X is whitelisted by two accounts, only one entry may be enabled; the
@@ -42,8 +51,9 @@ package_types            -- the catalog (admin-managed)
   name          text                      -- "50 GB / 90 days", "1 month pass"
   volume_bytes  bigint null               -- volume kind
   validity_days int not null              -- volume: expiry window; time: pass length
-  price_eur_cents int not null            -- reference price; BTCPay converts
-                                          -- to BTC/LN/XMR at invoice time
+  price_msat    bigint not null           -- price in millisatoshi (shown as sats;
+                                          -- BTCPay/phoenixd invoice this amount)
+  available_until timestamptz null        -- promo window; hidden afterwards
   active        bool
 
 purchases                -- one per BTCPay invoice
@@ -79,7 +89,6 @@ services                 -- modular egress catalog (clearnet, tor, ...)
   rate_ppm      bigint not null           -- consumption rate, parts-per-million:
                                           -- 1_000_000 = 1.0x, 1_500_000 = 1.5x;
                                           -- balance -= bytes * rate_ppm / 1e6
-  backend       text                      -- "dante" | "tor-socks" | ... (informational)
   enabled       bool
 ```
 
@@ -90,7 +99,17 @@ services (one `@authorized` set); only metering and rates are per-service.
 ## Accounting & nodes
 
 ```
-exit_nodes
+wg_peers                 -- WireGuard devices (one row per client key)
+  id            pk
+  account_id    fk -> accounts           -- the account whose package it draws from
+  npub          text not null            -- whitelist identity it was issued to
+  fips_addr     inet not null            -- derived: the OUTER source that must be authorized
+  pubkey        text unique not null     -- client public key; private keys are never stored
+  idx           integer unique not null  -- inner addresses = pool4 + idx, pool6::idx
+  label, created_by, created_at
+  -- the agent mirrors ALL rows onto wg0 (etag-polled); the UDP port gate decides
+
+exit_nodes                               -- + wg_pubkey, wg_endpoint, wg_seen_at (announced by heartbeat)
   id            pk
   name          text
   node_pubkey   text                      -- Ed25519, from enrollment
@@ -104,14 +123,25 @@ usage_reports            -- idempotency ledger, one row per agent report
   window_end    timestamptz
   received_at
 
-usage_samples            -- per-address, per-service deltas, partitioned by month
-  report_id     fk -> usage_reports
-  service_id    fk -> services
+usage_samples            -- per-address, per-service deltas (one row per 30 s window)
+  report_id     fk -> usage_reports       -- ON DELETE CASCADE
+  service_id    fk -> services (null = unknown service key)
   fips_addr     inet
   account_id    fk null                   -- resolved at ingest; null if unknown
   bytes         bigint                    -- metered total (both directions);
                                           -- weighted consumption =
                                           -- bytes * services.rate_ppm / 1e6
+  -- NOT partitioned. Rows older than RETENTION_DAYS (90) are rolled up into
+  -- usage_daily and deleted with their reports (backend retention job);
+  -- samples with no account or an unknown service are dropped then.
+
+usage_daily              -- per-account, per-service, per-day totals (the roll-up)
+  account_id    fk -> accounts
+  service_id    fk -> services
+  day           date
+  bytes         bigint
+  pk (account_id, day, service_id)
+  -- dashboard and metrics totals = usage_samples + usage_daily
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -119,19 +149,17 @@ authz_revisions          -- append-only log driving the agent delta sync
   fips_addr     inet
   account_id    fk
   created_at
-  -- compacted periodically; full set = view over accounts/whitelist/entitlements
+  -- compacted after REVISION_RETENTION_DAYS (30): rows older than that are
+  -- deleted, always keeping the newest (max(rev) is the global revision); an
+  -- agent whose cursor predates the kept range is handed the full set, which
+  -- it reconciles against its kernel set.
 ```
 
 ## Portal sessions
 
-```
-sessions
-  id            pk (random 256-bit)
-  npub          text not null             -- acting identity
-  account_id    fk null                   -- resolved account (owner or via whitelist)
-  method        fips|nip07|nip55|nip46|manual
-  created_at, expires_at
-```
+There is no sessions table. A session is a stateless HMAC-signed cookie
+(`backend/session.go`: npub + expiry, 7-day TTL, HttpOnly, SameSite=Lax);
+logout clears the cookie. Rotating `SESSION_SECRET` invalidates every session.
 
 ## Invariants worth enforcing in code
 
@@ -142,4 +170,7 @@ sessions
   statement at usage ingest; crossing the limit emits `del` to
   `authz_revisions` and the inline `revoke` in the usage ack.
 - Whitelist changes and entitlement expiry both write `authz_revisions`;
-  a periodic sweep expires time-based entitlements between traffic events.
+  a periodic sweep (`EXPIRY_SWEEP_S`, default 60 s) recomputes the set between
+  traffic events so time-based entitlements expire on time. Recomputes are
+  serialized by an advisory lock so revision numbers are monotonic in commit
+  order, and each one `NOTIFY`s agent long-polls.

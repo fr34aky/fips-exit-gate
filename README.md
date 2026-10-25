@@ -46,7 +46,7 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 | `captive/` | The captive daemon: a minimal SOCKS5 server that answers **unauthorized** clients with an HTTP `302` to the portal (carrying a signed token) and cleanly refuses everything else. |
 | `agent/` | The exit-node agent: reconciles the nftables `authorized` set from the backend (long-poll), reads the per-`(client,service)` byte counters, reports usage, and enforces quota cutoffs. Drives `nft`; otherwise stdlib-only (portable to OpenWrt). |
 | `backend/` | The control plane + user portal (Go + Postgres): the agent-facing API (enroll / authz / usage), nostr login (NIP-07 + transparent fips-source), the package catalog, whitelist management, and the BTCPay payment webhook. |
-| `deploy/` | Everything to run a node: compose files, the templated **nftables** ruleset (`render-nftables.sh` over `services.conf`), unbound config, `up.sh`, systemd units, and the BTCPay stack. |
+| `deploy/` | Everything to run a node: compose files, the templated **nftables** ruleset (`render-nftables.sh` over `services.conf`), unbound config, `up.sh`, systemd units, the BTCPay stack, and `client/` (the whole-device tunnel for clients). |
 | `cmd/` | CLIs: `fips-derive` (npub→address), and `fake-backend` / `fake-btcpay` test doubles for local/hardware bring-up without the real dependencies. |
 | `docs/` | This documentation and the specs (derivation, agent↔backend API, data model, threat model). |
 
@@ -55,7 +55,7 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 | Component | Purpose |
 |---|---|
 | **Dante** `sockd` | The clearnet SOCKS5 egress server (compiled from source in `exit/`). |
-| **nftables** | The gate: routes authorized source addresses to the service and everyone else to the captive daemon, and holds the per-service byte counters. Gates only the service ports — never general fips traffic. |
+| **nftables** | The gate: routes authorized source addresses to the service and everyone else to the captive daemon, enforces membership on **every packet** (a revoked address loses its open connections at once, not just new ones), and holds the per-service byte counters. Gates only the service ports — never general fips traffic. |
 | **unbound** | Server-side DNS resolver so clients can send hostnames and leak no DNS locally. |
 | **Postgres** | The backend's data store: accounts, entitlements, usage ledger, the materialized authorized set + revision log. |
 | **BTCPay Server** (+ Monero plugin) | Self-hosted payments, wired to the operator's **external** bitcoind/monerod over Tor; issues invoices and signs the settlement webhook. |
@@ -64,9 +64,11 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 
 ## How access works
 
-An account is a nostr identity that has bought a package; it may whitelist
-further npubs to share it. The backend materializes the set of authorized fips
-addresses (owner + enabled guests with an active entitlement) and the agent
+An account is a nostr identity that has bought a package; it may invite
+further npubs to share it, and each invitation takes effect once the invited
+identity accepts it (so nobody can attach, and thereby lock out, an identity
+that isn't theirs). The backend materializes the set of authorized fips
+addresses (owner + accepted guests with an active entitlement) and the agent
 mirrors it into the kernel `authorized` set. Traffic from an authorized address
 reaches the egress service and is metered — one shared balance, decremented by
 `bytes × per-service rate`. Everyone else is handed to the captive daemon.
@@ -84,8 +86,9 @@ and never metered.
 - **[Observability](docs/observability.md)** — Prometheus `/metrics` on every service, plus scrape config and alert rules.
 - **[Hardening](docs/hardening.md)** — egress abuse policy, per-account ceilings, logging/privacy.
 - **[Testing payments](docs/testing-payments.md)** — run the BTCPay, phoenixd, and Cashu fakes to exercise payments with no real node, mint, or channel.
+- **[Whole-device mode](docs/client-tunnel.md)** — route an entire client (not just the browser) through the exit with no proxy settings, using the `deploy/client/` tunnel service.
 
-Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md).
+Egress services: [Connectivity (clearnet + .onion)](docs/connectivity.md) · [Tor / Privacy rail](docs/phase4b-tor.md) · [WireGuard (whole-device, no proxy settings)](docs/wireguard.md).
 
 Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/api-agent-backend.md) · [data model](docs/data-model.md) · [threat model](docs/threat-model.md) · [security review](docs/security-review.md) · payments: [BTCPay](docs/phase4-btcpay.md) · [phoenixd (Lightning)](docs/phoenixd.md).
 
@@ -93,6 +96,8 @@ Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/a
 
 ```sh
 gofmt -l . && go vet ./... && go test ./...
+sh deploy/test/run-nft-gate-test.sh   # nftables gate against a real kernel (needs Docker)
+sh deploy/client/test/run-tunnel-test.sh   # whole-device client tunnel against a real SOCKS server (needs Docker)
 ```
 
 Store integration tests run only when `TEST_DATABASE_URL` is set (use a

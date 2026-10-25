@@ -1,0 +1,13 @@
+# Drop-in for the fips mesh firewall (default-deny inbound on the fips TUN):
+# allow the exit's service ports. Install to /etc/fips/fips.d/fips-exit.nft and
+# reload the fips firewall service. Verify the chain name against your fips
+# version (`nft list table inet fips`); this matches the documented layout.
+#
+# The exit's own table (inet fips_exit) still decides WHO may use these ports;
+# this only lets the packets reach it.
+table inet fips {
+    chain inbound {
+        tcp dport { 1080, 1081 } accept comment "fips-exit SOCKS services"
+        udp dport 51820 accept comment "fips-exit WireGuard service"
+    }
+}

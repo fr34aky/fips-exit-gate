@@ -86,7 +86,8 @@ PORTAL_TRUST_FIPS_SOURCE=1   # transparent fips login (default on); 0 only behin
 PORTAL_SECURE_COOKIES=0      # 0 for the HTTP fips portal (default); 1 when served over HTTPS
 
 # --- Metrics (optional) ---
-METRICS_TOKEN=               # empty = /metrics open (restrict by network); set a token to require it
+METRICS_TOKEN=               # empty = /metrics open on the admin listener (loopback by default); set a token to require it
+LISTEN_ADMIN=127.0.0.1:8081   # /admin and /metrics; set :8081 on a management interface to reach them remotely
 
 # --- Payments: pick a rail — see "6. Payments" below (empty = admin-credit only) ---
 PAYMENT_RAIL=                # btcpay | phoenixd | empty
@@ -97,7 +98,7 @@ Bring it up:
 ```sh
 set -a; . ./backend.env; set +a
 docker compose -f backend-compose.yaml up -d --build     # Postgres + backend on :8080
-curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8080/admin/authz
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8081/admin/authz
 # -> {"addresses":[],"rev":0}
 ```
 
@@ -114,7 +115,7 @@ The agent authenticates with a one-time enroll token issued by the backend:
 
 ```sh
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
-     -XPOST http://localhost:8080/admin/enroll-token -d '{"note":"exit-01"}'
+     -XPOST http://127.0.0.1:8081/admin/enroll-token -d '{"note":"exit-01"}'
 # -> {"enroll_token":"..."}    keep this for step 3
 ```
 
@@ -189,7 +190,7 @@ curl -s -H "$H" $URL/admin/authz            # -> the account's fips address appe
 Within a few seconds the agent mirrors it into the kernel set
 (`sudo nft list set inet fips_exit authorized`). Then, **from a separate fips
 peer** whose npub you credited (not the exit host itself — see
-[Troubleshooting](troubleshooting.md#everything-works-but-the-exit-host-itself-isnt-gated)):
+[Troubleshooting](troubleshooting.md#testing-from-the-exit-host-itself-hangs)):
 
 ```sh
 EXIT=<EXIT_FIPS_ADDR>
@@ -275,6 +276,12 @@ Set the store's **Transaction Speed to ≥ 1 confirmation** so on-chain payments
 grant only once finalized (Lightning stays instant). Full runbook:
 [docs/phase4-btcpay.md](phase4-btcpay.md).
 
+## WireGuard (whole-device, no proxy settings)
+
+Optional: offer a WireGuard endpoint over fips so clients import one
+configuration instead of proxy settings. Same authorization and billing;
+setup in [WireGuard](wireguard.md).
+
 ## Client browser setup (PAC)
 
 Clients browse the Internet through the exit's SOCKS5 proxy while still reaching
@@ -311,6 +318,15 @@ The PAC returns `DIRECT` for `.fips`, the fips ULA range, and localhost, and
 if the exit is down, Internet traffic fails closed rather than leaking around the
 proxy. Hosting the file at a `<npub>.fips` URL lets you push an exit-address
 change to every client at once.
+
+## Whole-device mode (no proxy settings)
+
+To send *everything* on a client through the exit — not just the browser — see
+[Whole-device mode](client-tunnel.md): a small systemd service in
+`deploy/client/` runs `tun2socks` on a TUN, policy-routes all Internet traffic
+into the exit's SOCKS port over fips (failing closed if the tunnel dies), keeps
+fips and the LAN direct, and moves DNS to DNS-over-TLS so names resolve through
+the tunnel. Nothing changes on the exit; gating and billing are identical.
 
 ## Uninstall / teardown
 

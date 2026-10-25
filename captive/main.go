@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/fr34aky/fips-exit-gate/pkg/logging"
 )
 
 type config struct {
@@ -45,6 +47,7 @@ func loadConfig() (config, error) {
 }
 
 func main() {
+	logging.Setup("captive")
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("captive: config: %v", err)

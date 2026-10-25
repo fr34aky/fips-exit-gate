@@ -20,14 +20,46 @@ client is still blocked, the problem is **that client's entitlement** or the
 
 ---
 
-## Everything works, but the exit host itself isn't gated
+## Testing from the exit host itself hangs
 
-**Symptom:** testing the proxy *from the exit node itself* gives direct access
-(no captive redirect, no auth).
-**Cause:** the gate only fires on traffic **ingressing via the fips interface**
-(`iifname "fips0"`). Traffic from the exit host to its own fips address goes
-over loopback, so `iifname != fips0` and the gate returns early.
-**Fix:** always test from a **separate fips peer**, never the exit host.
+**Symptom:** `curl --socks5-hostname [EXIT_FIPS_ADDR]:1080 …` *on the exit node
+itself* fails with "connection refused" (no captive redirect).
+**Cause:** service ports are reachable only via the fips interface. Traffic from
+the exit host to its own fips address goes over loopback, and the `svc_in`
+chain resets service-port traffic from any interface other than `fips0` so that
+nothing on the host (or routed to it) reaches the gated ports around the gate.
+(Dante on `127.0.0.1:1090` and Tor's loopback SocksPort are reachable to local
+processes by design; they are the dispatcher's upstreams, not client ports.)
+**Fix:** always test from a **separate fips peer**, never the exit host. To
+check the ruleset itself without a peer, run `deploy/test/run-nft-gate-test.sh`.
+
+## A revoked client is still connected
+
+It shouldn't be for more than one packet: removal from `authorized` resets the
+client's open service-port flows on their next packet in either direction
+(`svc_in`/`svc_out`), and the dispatcher closes silent tunnels after
+`DISPATCH_IDLE_TIMEOUT_S`. If a client keeps transferring after revocation,
+check that the address is really gone from the kernel set (`nft list set inet
+fips_exit authorized`) and that the loaded ruleset has the `svc_in` chain
+(`nft list chain inet fips_exit svc_in`; an old ruleset predating it only gates
+new connections — `sudo ./up.sh reload`).
+
+## Agent logs `REFUSING full reconcile`
+
+**Symptom:** `agent: REFUSING full reconcile: full set would revoke N of M live
+addresses`, and `fipsexit_agent_mass_revoke_refusals_total` increases.
+**Cause:** the backend returned a full authorized set that would remove more
+than `FIPS_AGENT_MASS_REVOKE_MIN` (50) addresses *and* more than half of what
+the node currently serves. The agent treats that as a probable backend problem
+(restored/empty database, agent pointed at the wrong backend, broken
+recompute) rather than N simultaneous cancellations, and keeps serving its
+last-known set; delta syncs continue from the persisted cursor, so genuine
+revocations still arrive.
+**Fix:** check `/admin/authz` on the backend. If the small set is wrong, fix
+the backend (restore data, correct `FIPS_AGENT_BACKEND_URL`). If it is right
+(you really did revoke most users), let the agent apply it with
+`AUTHZ_ALLOW_MASS_REVOKE=1` on the backend (marks full responses
+`force: true`) or `FIPS_AGENT_ALLOW_MASS_REVOKE=1` on that node, then unset it.
 
 ## Authorized client still gets the captive 302 (or blocked)
 
@@ -46,12 +78,13 @@ there, the backend doesn't consider it authorized.
 the npub you credited. Verify: `go run ./cmd/fips-derive <npub>` should equal the
 client's fips address.
 
-**Cause 4 — you just ran `up.sh reload`.** Reload does `nft delete table` +
-reload, which recreates the `authorized` set **empty** (it's seeded from
-`allowlist.txt`, empty in agent mode). Until the agent re-syncs, every client is
-unauthorized, so previously-working clients suddenly get the captive daemon — and
-because it can't intercept TLS, HTTPS fails as `curl: (35) OpenSSL SSL_connect:
-SSL_ERROR_SYSCALL` rather than an obvious redirect.
+**Cause 4 — you just ran `up.sh reload` on an old build.** Reload does
+`nft delete table` + reload; it now carries the live `authorized` members across
+(printed as "N live grant(s) carried over"). Before that, the set came back
+**empty** (seeded from `allowlist.txt`, empty in agent mode) and every client was
+unauthorized until the agent re-synced — with per-packet enforcement that also
+reset their open tunnels. If you see the warning that grants could not be
+re-added, the agent's next reconcile restores them.
 **Fix:** the agent now self-heals this — it forces a full reconcile every few
 minutes (and immediately when the backend's heartbeat spots the set-size
 mismatch), so the set refills on its own. To repair it instantly, restart the
@@ -205,10 +238,41 @@ A `401` from the webhook endpoint means the secret doesn't match.
 ## Whitelisting fails with "address already active on another account"
 
 **Cause:** an fips address may be **active on at most one account** (deterministic
-attribution). The guest npub is already an enabled entry elsewhere (often its own
-account).
-**Fix:** disable it on the other account first, or accept that its traffic is
-attributed where it's currently active.
+attribution). This only happens on the admin path (`POST /admin/whitelist`,
+which attaches immediately): the guest npub is already active elsewhere, often
+on its own account.
+**Fix:** use the portal flow instead (the owner invites, the guest accepts from
+their own dashboard, which moves the address), or disable it on the other
+account first.
+
+## Paid for a package but still not authorized
+
+Start with `GET /admin/accounts/<npub>`: it lists every whitelist row for the
+account with `authorized`/`authz_account`, competing rows on other accounts
+(`conflicts`), the entitlements, and open invitations.
+
+- `attached_to` is set: the user accepted someone else's invitation, so their
+  address is attributed to that account and their own packages sit unused.
+  Buying a package switches them back automatically; the dashboard also
+  offers "Use my own account instead". From the admin side,
+  `POST /admin/whitelist {"owner_npub":"<host>","guest_npub":"<npub>","enabled":false}`
+  disables the guest row and hands the address back to the user's own account
+  in the same step.
+- The owner row shows a conflict that is `pending`: harmless, someone invited
+  them; pending rows never affect authorization.
+- `authorized: false` with an active entitlement and no conflicts: the agent
+  side (see "Authorized client still gets the captive 302").
+- The user signed in with a **nostr** key and is browsing from a fips node
+  whose address is not on the account: the dashboard shows "This device isn't
+  on your account" with instructions; inviting that device from itself is
+  accepted instantly.
+
+## Is the backend healthy?
+
+`curl -s http://<backend>:8080/healthz` (process up) and
+`curl -s http://<backend>:8080/readyz` (database reachable, all migrations
+applied; 503 with the reason otherwise). After an upgrade, `readyz` turning
+green is the signal that migrations ran.
 
 ## Backend won't start
 
