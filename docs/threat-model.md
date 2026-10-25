@@ -17,10 +17,17 @@ the mesh.
   consumption); optional future hardening: periodic in-band re-auth
   (signed nostr challenge) for high-volume sessions.
 - Service ports are reachable **only via the fips TUN interface**: the rendered
-  ruleset (`svc_in`) drops service-port traffic that arrives from loopback or
+  ruleset (`svc_in`) resets service-port traffic that arrives from loopback or
   any other interface, so neither the exit host itself nor anything routed to
-  it can bypass the gate (the SOCKS listeners bind the fips address, not the
-  interface, so the firewall is what enforces this).
+  it can reach the gated ports around the gate (the SOCKS listeners bind the
+  fips address, not the interface, so the firewall is what enforces this). The
+  dispatcher's loopback upstreams (Dante `127.0.0.1:1090`, Tor's loopback
+  SocksPort) stay reachable to local processes by design; a local process is
+  the operator's own.
+- A port a compose service may bind on the fips address (`CONNECTIVITY_PORT`,
+  `TOR_PORT`) that is **missing from `services.conf`** is refused from fips by
+  the ruleset, so a service started before its catalog line is unreachable,
+  never open-but-unmetered.
 - Authorization is re-checked on **every packet**, not only when a connection
   opens. The captive redirect is a NAT decision (once per flow), but
   `svc_in`/`svc_out` reset any service-port flow whose source has left the

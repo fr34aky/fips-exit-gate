@@ -27,6 +27,11 @@
 #   SERVICES_FILE   path to services.conf     (default: ./services.conf)
 #   ALLOWLIST_FILE  newline-separated fips addresses (default: ./allowlist.txt)
 #   MAX_CONNS_PER_SRC  per-source concurrent-connection ceiling (0 = disabled)
+#   GUARD_PORTS     space-separated ports a compose service may bind on
+#                   EXIT_FIPS_ADDR (CONNECTIVITY_PORT, TOR_PORT). Any of them
+#                   NOT listed in services.conf is rendered unreachable from
+#                   fips, so a service started without its catalog line is
+#                   refused instead of being open, ungated and unmetered.
 set -eu
 
 FIPS_IF="${FIPS_IF:?FIPS_IF is required}"
@@ -35,6 +40,7 @@ CAPTIVE_PORT="${CAPTIVE_PORT:?CAPTIVE_PORT is required}"
 SERVICES_FILE="${SERVICES_FILE:-$(dirname "$0")/services.conf}"
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-$(dirname "$0")/allowlist.txt}"
 MAX_CONNS_PER_SRC="${MAX_CONNS_PER_SRC:-0}"
+GUARD_PORTS="${GUARD_PORTS:-}"
 
 # Collect enabled service ports.
 ports=""
@@ -48,6 +54,19 @@ while read -r key port; do
     ports="${ports:+$ports, }$port"
 done < "$SERVICES_FILE"
 [ -n "$ports" ] || { echo "no services enabled in $SERVICES_FILE" >&2; exit 1; }
+
+# Ports that may be bound on the fips address but are not catalogued: refused.
+ungated=""
+for gp in $GUARD_PORTS; do
+    case ", $ports," in
+        *", $gp,"*) ;;
+        *) case ", $ungated," in *", $gp,"*) ;; *) ungated="${ungated:+$ungated, }$gp" ;; esac ;;
+    esac
+done
+ungated_rule=""
+if [ -n "$ungated" ]; then
+    ungated_rule="        iifname \"$FIPS_IF\" ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ungated } tcp flags & rst == 0 counter reject with tcp reset comment \"not in services.conf: refused rather than ungated\""
+fi
 
 # Seed elements for the authorized set from the allowlist (may be empty).
 elements=""
@@ -109,8 +128,11 @@ $( [ -n "$elements" ] && printf '        elements = { %s }\n' "$elements" )
     # redirected to the captive daemon now carries dport $CAPTIVE_PORT and is
     # not matched here; only flows that reached a real service port are).
     #   - service ports are reachable ONLY via the fips interface: traffic from
-    #     loopback or any other interface is dropped, so the exit host itself
-    #     (and anything routed to it) can't bypass the gate;
+    #     loopback or any other interface is refused (reset, so a misdirected
+    #     local client fails fast instead of hanging), so the exit host itself
+    #     (and anything routed to it) can't bypass the gate on those ports;
+    #   - a port a compose service may bind (GUARD_PORTS) that is missing from
+    #     services.conf is refused from fips: never open-but-ungated;
     #   - a flow whose source has left the authorized set is reset on its next
     #     packet in either direction, so revocation/quota exhaustion cuts live
     #     tunnels instead of only blocking new ones.
@@ -119,8 +141,9 @@ $( [ -n "$elements" ] && printf '        elements = { %s }\n' "$elements" )
     # peer's own RST only ever closes a connection.
     chain svc_in {
         type filter hook input priority filter; policy accept;
-        iifname != "$FIPS_IF" ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ports } tcp flags & rst == 0 counter drop
+        iifname != "$FIPS_IF" ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ports } tcp flags & rst == 0 counter reject with tcp reset
         iifname "$FIPS_IF" ip6 daddr $EXIT_FIPS_ADDR tcp dport { $ports } tcp flags & rst == 0 ip6 saddr != @authorized counter reject with tcp reset
+$ungated_rule
     }
     chain svc_out {
         type filter hook output priority filter; policy accept;

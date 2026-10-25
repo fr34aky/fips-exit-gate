@@ -13,16 +13,68 @@ func relayDone(a, b net.Conn, idle, maxLife time.Duration) <-chan struct{} {
 	return done
 }
 
-func TestRelayIdleTimeoutClosesTunnel(t *testing.T) {
-	a1, a2 := net.Pipe()
-	b1, b2 := net.Pipe()
+// tcpPair returns a connected loopback TCP pair (server side, client side).
+func tcpPair(t *testing.T) (srv, cli net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() { c, _ := ln.Accept(); accepted <- c }()
+	cli, err = net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv = <-accepted
+	if srv == nil {
+		t.Fatal("accept failed")
+	}
+	return srv, cli
+}
+
+func TestRelayIdleTimeoutClosesSilentTunnel(t *testing.T) {
+	a1, a2 := tcpPair(t)
+	b1, b2 := tcpPair(t)
 	defer a2.Close()
 	defer b2.Close()
-	done := relayDone(a1, b1, 100*time.Millisecond, 0)
+	done := relayDone(a1, b1, time.Second, 0)
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("relay did not end after idle timeout")
+	}
+}
+
+// A slow trickle (far less than any buffer size) must count as activity: the
+// kernel's last-data-received clock sees every segment.
+func TestRelayTrickleDefersIdleTimeout(t *testing.T) {
+	a1, a2 := tcpPair(t)
+	b1, b2 := tcpPair(t)
+	defer a2.Close()
+	defer b2.Close()
+	done := relayDone(a1, b1, time.Second, 0)
+	buf := make([]byte, 4)
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := a2.Write([]byte("ping")); err != nil {
+			t.Fatalf("write during active tunnel: %v", err)
+		}
+		if _, err := b2.Read(buf); err != nil {
+			t.Fatalf("read during active tunnel: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("relay ended while a trickle was flowing")
+	default:
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("relay did not end after the trickle stopped")
 	}
 }
 
@@ -32,7 +84,6 @@ func TestRelayMaxLifetimeClosesActiveTunnel(t *testing.T) {
 	defer a2.Close()
 	defer b2.Close()
 	done := relayDone(a1, b1, 0, 150*time.Millisecond)
-	// Keep traffic flowing so only the lifetime bound can end it.
 	go func() {
 		buf := make([]byte, 4)
 		for {
@@ -52,34 +103,20 @@ func TestRelayMaxLifetimeClosesActiveTunnel(t *testing.T) {
 	}
 }
 
-func TestRelayActivityDefersIdleTimeout(t *testing.T) {
+// Conn types without a kernel idle signal (net.Pipe in tests) are never cut
+// by the idle bound: the watchdog bows out rather than guessing.
+func TestRelayIdleBoundNotEnforcedWithoutSignal(t *testing.T) {
 	a1, a2 := net.Pipe()
 	b1, b2 := net.Pipe()
-	defer a2.Close()
-	defer b2.Close()
-	done := relayDone(a1, b1, 200*time.Millisecond, 0)
-	buf := make([]byte, 4)
-	deadline := time.Now().Add(600 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := a2.Write([]byte("ping")); err != nil {
-			t.Fatalf("write during active tunnel: %v", err)
-		}
-		if _, err := b2.Read(buf); err != nil {
-			t.Fatalf("read during active tunnel: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	done := relayDone(a1, b1, 100*time.Millisecond, 0)
 	select {
 	case <-done:
-		t.Fatal("relay ended while traffic was flowing")
-	default:
+		t.Fatal("relay ended on a conn type with no idle signal")
+	case <-time.After(1500 * time.Millisecond):
 	}
-	// Go quiet: now the idle bound should end it.
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("relay did not end after traffic stopped")
-	}
+	a2.Close()
+	b2.Close()
+	<-done
 }
 
 func TestRelayEndsWhenPeerCloses(t *testing.T) {
@@ -88,23 +125,10 @@ func TestRelayEndsWhenPeerCloses(t *testing.T) {
 	defer b2.Close()
 	done := relayDone(a1, b1, time.Hour, time.Hour)
 	a2.Close()
-	// net.Pipe has no CloseWrite, so the b side only ends once b2 closes too.
-	b2.Close()
+	b2.Close() // net.Pipe has no CloseWrite, so the b side only ends once b2 closes too
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("relay did not end after both peers closed")
-	}
-}
-
-func TestWatchdogInterval(t *testing.T) {
-	if got := watchdogInterval(0, 0); got != 5*time.Second {
-		t.Fatalf("no bounds: got %v", got)
-	}
-	if got := watchdogInterval(time.Second, 0); got != 250*time.Millisecond {
-		t.Fatalf("idle 1s: got %v", got)
-	}
-	if got := watchdogInterval(0, 20*time.Millisecond); got != 10*time.Millisecond {
-		t.Fatalf("floor: got %v", got)
 	}
 }

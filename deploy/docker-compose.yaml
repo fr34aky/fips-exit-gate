@@ -46,6 +46,10 @@ services:
       CLEARNET_BIND: ${CLEARNET_BIND:-127.0.0.1}
       CLEARNET_PORT: ${CLEARNET_PORT:-1090}
       WORKERS: ${WORKERS:-4}
+    volumes:
+      # Bind the egress policy so edits don't require an image rebuild
+      # (docs/hardening.md). The entrypoint renders /srv/sockd.conf on start.
+      - ../exit/sockd.conf:/srv/sockd.conf:ro
 
   # Connectivity dispatcher (Phase 4c): the client-facing SOCKS endpoint on the
   # connectivity port. Routes by destination — *.onion to Tor's loopback
@@ -67,8 +71,8 @@ services:
       DISPATCH_TOR_UPSTREAM: "127.0.0.1:${TOR_DISPATCH_PORT:-9052}"
       # Tunnel bounds (defence in depth next to the per-packet nft gate): close a
       # relayed connection after this long idle, or after this long in total.
-      DISPATCH_IDLE_TIMEOUT_S: ${DISPATCH_IDLE_TIMEOUT_S:-600}
-      DISPATCH_MAX_LIFETIME_S: ${DISPATCH_MAX_LIFETIME_S:-86400}
+      DISPATCH_IDLE_TIMEOUT_S: ${DISPATCH_IDLE_TIMEOUT_S:-7200}
+      DISPATCH_MAX_LIFETIME_S: ${DISPATCH_MAX_LIFETIME_S:-0}
 
   # Phase 4b: second egress service — Tor. Same gate/captive/agent/billing, just
   # a new SOCKS endpoint on another port. Its SocksPort binds ONLY the fips

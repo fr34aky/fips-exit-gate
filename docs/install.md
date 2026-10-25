@@ -189,7 +189,7 @@ curl -s -H "$H" $URL/admin/authz            # -> the account's fips address appe
 Within a few seconds the agent mirrors it into the kernel set
 (`sudo nft list set inet fips_exit authorized`). Then, **from a separate fips
 peer** whose npub you credited (not the exit host itself — see
-[Troubleshooting](troubleshooting.md#everything-works-but-the-exit-host-itself-isnt-gated)):
+[Troubleshooting](troubleshooting.md#testing-from-the-exit-host-itself-hangs)):
 
 ```sh
 EXIT=<EXIT_FIPS_ADDR>

@@ -23,11 +23,13 @@ client is still blocked, the problem is **that client's entitlement** or the
 ## Testing from the exit host itself hangs
 
 **Symptom:** `curl --socks5-hostname [EXIT_FIPS_ADDR]:1080 …` *on the exit node
-itself* never connects (no captive redirect, no error, just a timeout).
+itself* fails with "connection refused" (no captive redirect).
 **Cause:** service ports are reachable only via the fips interface. Traffic from
 the exit host to its own fips address goes over loopback, and the `svc_in`
-chain drops service-port traffic from any interface other than `fips0` so that
-nothing on the host (or routed to it) gets ungated proxy access.
+chain resets service-port traffic from any interface other than `fips0` so that
+nothing on the host (or routed to it) reaches the gated ports around the gate.
+(Dante on `127.0.0.1:1090` and Tor's loopback SocksPort are reachable to local
+processes by design; they are the dispatcher's upstreams, not client ports.)
 **Fix:** always test from a **separate fips peer**, never the exit host. To
 check the ruleset itself without a peer, run `deploy/test/run-nft-gate-test.sh`.
 
@@ -59,12 +61,13 @@ there, the backend doesn't consider it authorized.
 the npub you credited. Verify: `go run ./cmd/fips-derive <npub>` should equal the
 client's fips address.
 
-**Cause 4 — you just ran `up.sh reload`.** Reload does `nft delete table` +
-reload, which recreates the `authorized` set **empty** (it's seeded from
-`allowlist.txt`, empty in agent mode). Until the agent re-syncs, every client is
-unauthorized, so previously-working clients suddenly get the captive daemon — and
-because it can't intercept TLS, HTTPS fails as `curl: (35) OpenSSL SSL_connect:
-SSL_ERROR_SYSCALL` rather than an obvious redirect.
+**Cause 4 — you just ran `up.sh reload` on an old build.** Reload does
+`nft delete table` + reload; it now carries the live `authorized` members across
+(printed as "N live grant(s) carried over"). Before that, the set came back
+**empty** (seeded from `allowlist.txt`, empty in agent mode) and every client was
+unauthorized until the agent re-synced — with per-packet enforcement that also
+reset their open tunnels. If you see the warning that grants could not be
+re-added, the agent's next reconcile restores them.
 **Fix:** the agent now self-heals this — it forces a full reconcile every few
 minutes (and immediately when the backend's heartbeat spots the set-size
 mismatch), so the set refills on its own. To repair it instantly, restart the

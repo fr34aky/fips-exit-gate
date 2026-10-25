@@ -24,34 +24,26 @@ fi
 export CAPTIVE_PORT
 NFT_FILE="${NFT_FILE:-/etc/nftables.d/fips-exit.nft}"
 
-# Refuse to leave a running Tor SocksPort ungated. Tor binds EXIT_FIPS_ADDR:TOR_PORT
-# for every fips address; only the rendered gate restricts it to paying clients.
-# If the tor container is running (or is about to be, via COMPOSE_PROFILES) its
-# port must be in services.conf, otherwise the whole mesh gets free, unmetered Tor.
-check_tor_gated() {
-    tor_port="${TOR_PORT:-1081}"
-    tor_up=0
-    case ",${COMPOSE_PROFILES:-}," in *,tor,*) tor_up=1 ;; esac
-    if [ "$tor_up" -eq 0 ] && command -v docker >/dev/null 2>&1 && \
-       [ -n "$(docker ps -q --filter label=com.docker.compose.project=fips-exit \
-                              --filter label=com.docker.compose.service=tor 2>/dev/null)" ]; then
-        tor_up=1
-    fi
-    [ "$tor_up" -eq 1 ] || return 0
-    if ! grep -Eq "^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]+${tor_port}([[:space:]]|\$)" "$here/services.conf"; then
-        echo "ERROR: Tor is running (or starting) on :$tor_port but services.conf does not list that port." >&2
-        echo "       Every fips address would get ungated, unmetered Tor. Either add 'tor $tor_port' to" >&2
-        echo "       services.conf (plus the /admin/services row) or stop it: docker compose --profile tor down." >&2
-        echo "       ALLOW_UNGATED_TOR=1 overrides this check." >&2
-        [ "${ALLOW_UNGATED_TOR:-0}" = "1" ] || exit 1
-    fi
+# Ports that compose services bind on the fips address. Any of them missing
+# from services.conf is rendered unreachable from fips (see render-nftables.sh
+# GUARD_PORTS), so e.g. starting the tor profile before adding `tor 1081` yields
+# a refused port, never an open, ungated, unmetered one.
+guard_ports() {
+    echo "${CONNECTIVITY_PORT:-1080} ${TOR_PORT:-1081}"
+}
+
+# The live members of the authorized set, as an nft element list ("a, b, c"),
+# empty if the table/set doesn't exist. Used to carry grants across a reload.
+authorized_elements() {
+    nft list set inet fips_exit authorized 2>/dev/null \
+        | sed -n '/elements = {/,/}/p' | tr -d '\n\t' | sed 's/.*elements = {//; s/}.*//; s/^ *//; s/ *$//'
 }
 
 render_nft() {
     mkdir -p "$(dirname "$NFT_FILE")"
     FIPS_IF="${FIPS_IF:?}" EXIT_FIPS_ADDR="${EXIT_FIPS_ADDR:?}" \
     CAPTIVE_PORT="$CAPTIVE_PORT" \
-    MAX_CONNS_PER_SRC="${MAX_CONNS_PER_SRC:-0}" \
+    MAX_CONNS_PER_SRC="${MAX_CONNS_PER_SRC:-0}" GUARD_PORTS="$(guard_ports)" \
     SERVICES_FILE="$here/services.conf" ALLOWLIST_FILE="$here/allowlist.txt" \
         sh "$here/render-nftables.sh" > "$NFT_FILE"
     # Validate before touching the running ruleset.
@@ -60,7 +52,6 @@ render_nft() {
 
 case "${1:-up}" in
     up)
-        check_tor_gated
         render_nft
         nft -f "$NFT_FILE"
         echo "nftables loaded from $NFT_FILE"
@@ -69,16 +60,22 @@ case "${1:-up}" in
         docker compose -f "$here/docker-compose.yaml" up -d --build
         ;;
     reload)
-        check_tor_gated
         render_nft
         # Replace only our table, leaving the rest of the host firewall intact.
-        # This recreates the `authorized` set from allowlist.txt (empty in agent
-        # mode), so live grants are dropped until the agent re-syncs.
+        # The rendered file seeds `authorized` from allowlist.txt (empty in agent
+        # mode), so carry the LIVE members across: with per-packet enforcement an
+        # empty set would reset every open tunnel of every client until the
+        # agent's next reconcile, not merely block new connections.
+        live="$(authorized_elements)"
         nft delete table inet fips_exit 2>/dev/null || true
         nft -f "$NFT_FILE"
-        echo "nftables reloaded from $NFT_FILE"
-        echo "NOTE: the 'authorized' set was reset. In agent mode, restart the agent"
-        echo "      (docker restart <agent>) or wait for its next full sync to restore grants."
+        if [ -n "$live" ]; then
+            nft add element inet fips_exit authorized "{ $live }" \
+                && echo "nftables reloaded from $NFT_FILE; $(printf '%s' "$live" | tr ',' '\n' | wc -l) live grant(s) carried over" \
+                || echo "WARNING: could not re-add live grants; the agent's next reconcile restores them" >&2
+        else
+            echo "nftables reloaded from $NFT_FILE"
+        fi
         ;;
     down)
         docker compose -f "$here/docker-compose.yaml" down

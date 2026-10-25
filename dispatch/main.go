@@ -24,7 +24,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -49,8 +48,8 @@ func loadConfig() config {
 		onionSuffix:      getenv("DISPATCH_ONION_SUFFIX", ".onion"),
 		dialTimeout:      time.Duration(getenvInt("DISPATCH_DIAL_TIMEOUT_S", 15)) * time.Second,
 		handshakeTimeout: time.Duration(getenvInt("DISPATCH_HANDSHAKE_TIMEOUT_S", 15)) * time.Second,
-		idleTimeout:      time.Duration(getenvInt("DISPATCH_IDLE_TIMEOUT_S", 600)) * time.Second,
-		maxLifetime:      time.Duration(getenvInt("DISPATCH_MAX_LIFETIME_S", 86400)) * time.Second,
+		idleTimeout:      time.Duration(getenvInt("DISPATCH_IDLE_TIMEOUT_S", 7200)) * time.Second,
+		maxLifetime:      time.Duration(getenvInt("DISPATCH_MAX_LIFETIME_S", 0)) * time.Second,
 		maxConns:         getenvInt("DISPATCH_MAX_CONNS", 4096),
 	}
 }
@@ -135,19 +134,27 @@ func handle(client net.Conn, cfg config) {
 }
 
 // relay copies bytes in both directions until either side closes, using TCP
-// half-close so an EOF one way still lets the other drain. The tunnel is also
-// torn down after `idle` without traffic in either direction, or after
-// `maxLife` in total (0 disables either): defence in depth so a tunnel can't
-// outlive its owner's authorization indefinitely. The nftables gate resets a
-// revoked client's flow on its next packet; these bounds cover the silent ones.
+// half-close so an EOF one way still lets the other drain. Plain io.Copy on
+// the raw conns keeps Go's splice(2) zero-copy path for TCP<->TCP.
+//
+// Bounds (0 disables either): `maxLife` closes the tunnel after that long
+// regardless of activity (opt-in); `idle` closes it when NEITHER side has
+// received data for that long. Idleness is read from the kernel (TCP_INFO
+// tcpi_last_data_recv, see relay_linux.go) by a watchdog that wakes every
+// idle/4, so no byte is copied through userspace just to be counted and a slow
+// trickle is still seen as activity. On platforms or conn types without that
+// signal the idle bound is not enforced. Revoked clients don't rely on it: the
+// nftables gate resets their flows on the next packet, and the listener's TCP
+// keepalive provokes that even on a silent tunnel.
 func relay(a, b net.Conn, idle, maxLife time.Duration) {
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-	touch := func() { last.Store(time.Now().UnixNano()) }
-
+	closeBoth := func() { a.Close(); b.Close() }
+	if maxLife > 0 {
+		t := time.AfterFunc(maxLife, closeBoth)
+		defer t.Stop()
+	}
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, activityReader{r: src, touch: touch})
+		_, _ = io.Copy(dst, src)
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
@@ -156,59 +163,41 @@ func relay(a, b net.Conn, idle, maxLife time.Duration) {
 	go cp(a, b)
 	go cp(b, a)
 
-	if idle > 0 || maxLife > 0 {
+	if idle > 0 {
 		stop := make(chan struct{})
 		defer close(stop)
-		go func() {
-			start := time.Now()
-			t := time.NewTicker(watchdogInterval(idle, maxLife))
-			defer t.Stop()
-			for {
-				select {
-				case <-stop:
-					return
-				case now := <-t.C:
-					idleFor := now.Sub(time.Unix(0, last.Load()))
-					if (idle > 0 && idleFor >= idle) || (maxLife > 0 && now.Sub(start) >= maxLife) {
-						a.Close()
-						b.Close()
-						return
-					}
-				}
-			}
-		}()
+		go idleWatchdog(a, b, idle, stop, closeBoth)
 	}
 	<-done
 	<-done
 }
 
-// watchdogInterval picks how often the relay re-checks its bounds: fine enough
-// to enforce short limits promptly, coarse enough to cost nothing at scale.
-func watchdogInterval(idle, maxLife time.Duration) time.Duration {
-	iv := 5 * time.Second
-	for _, d := range []time.Duration{idle, maxLife} {
-		if d > 0 && d/4 < iv {
-			iv = d / 4
+// idleWatchdog closes the tunnel once both conns report no received data for
+// `idle`. It wakes every idle/4 (at least every second), so the effective
+// bound lies in [idle, 1.25*idle].
+func idleWatchdog(a, b net.Conn, idle time.Duration, stop <-chan struct{}, closeBoth func()) {
+	iv := idle / 4
+	if iv < time.Second {
+		iv = time.Second
+	}
+	t := time.NewTicker(iv)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			ia, okA := sinceLastRecv(a)
+			ib, okB := sinceLastRecv(b)
+			if !okA || !okB {
+				return // no kernel signal for this conn type: don't guess
+			}
+			if ia >= idle && ib >= idle {
+				closeBoth()
+				return
+			}
 		}
 	}
-	if iv < 10*time.Millisecond {
-		iv = 10 * time.Millisecond
-	}
-	return iv
-}
-
-// activityReader stamps the relay's last-activity clock on every read.
-type activityReader struct {
-	r     io.Reader
-	touch func()
-}
-
-func (ar activityReader) Read(p []byte) (int, error) {
-	n, err := ar.r.Read(p)
-	if n > 0 {
-		ar.touch()
-	}
-	return n, err
 }
 
 func getenv(k, def string) string {
