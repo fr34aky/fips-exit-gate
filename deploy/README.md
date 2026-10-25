@@ -78,7 +78,10 @@ counters increment on real traffic.
 `up.sh` still runs `nft -c -f` before loading, so a malformed ruleset fails
 safely.
 
-> Gotcha learned during bring-up: the gate only fires on traffic ingressing via
-> `fips0`. Testing from the exit host itself reaches the exit's own fips address
-> over loopback (`iifname != fips0`), bypassing the gate — always test from a
-> separate fips peer.
+> Gotcha learned during bring-up: the captive redirect only fires on traffic
+> ingressing via `fips0`, and the ruleset now **drops** service-port traffic from
+> any other interface. Testing from the exit host itself reaches its own fips
+> address over loopback, so the connection simply hangs — always test from a
+> separate fips peer. `test/run-nft-gate-test.sh` runs the gate semantics
+> (redirect, accept, loopback drop, live reset on revocation, accounting) against
+> a real kernel in a throwaway container, no fips node needed.
