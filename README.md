@@ -55,7 +55,7 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 | Component | Purpose |
 |---|---|
 | **Dante** `sockd` | The clearnet SOCKS5 egress server (compiled from source in `exit/`). |
-| **nftables** | The gate: routes authorized source addresses to the service and everyone else to the captive daemon, and holds the per-service byte counters. Gates only the service ports — never general fips traffic. |
+| **nftables** | The gate: routes authorized source addresses to the service and everyone else to the captive daemon, enforces membership on **every packet** (a revoked address loses its open connections at once, not just new ones), and holds the per-service byte counters. Gates only the service ports — never general fips traffic. |
 | **unbound** | Server-side DNS resolver so clients can send hostnames and leak no DNS locally. |
 | **Postgres** | The backend's data store: accounts, entitlements, usage ledger, the materialized authorized set + revision log. |
 | **BTCPay Server** (+ Monero plugin) | Self-hosted payments, wired to the operator's **external** bitcoind/monerod over Tor; issues invoices and signs the settlement webhook. |
