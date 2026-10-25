@@ -2,10 +2,12 @@
 
 Day-two tasks: managing accounts, adding nodes/services, rotating secrets,
 backups, and upgrades. Admin calls use the backend's `/admin` API (bearer
-`ADMIN_TOKEN`).
+`ADMIN_TOKEN`), served on the operator listener `LISTEN_ADMIN` — loopback
+`127.0.0.1:8081` by default, so run these on the backend host (or over SSH
+port forwarding).
 
 ```sh
-H="Authorization: Bearer $ADMIN_TOKEN"; URL=https://backend.example:8080
+H="Authorization: Bearer $ADMIN_TOKEN"; URL=http://127.0.0.1:8081
 ```
 
 ## Admin quick reference
@@ -18,6 +20,7 @@ curl -H "$H" -XPOST $URL/admin/credit     -d '{"npub":"npub1...","kind":"time","
 curl -H "$H" -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_npub":"npub1...","label":"laptop"}'
 curl -H "$H" -XPOST $URL/admin/whitelist  -d '{"owner_npub":"npub1...","guest_npub":"npub1...","enabled":false}'  # disable a guest
 curl -H "$H"        $URL/admin/authz       # current authorized set
+curl -H "$H"        $URL/admin/accounts/npub1...   # "why can't this user get out?": whitelist rows + conflicts, authz state, entitlements, pending invitations
 
 # Catalog  (price_sats is in sats; add "available_days":N for a time-limited promo)
 curl -H "$H"        $URL/admin/packages
@@ -70,13 +73,18 @@ gate/catalog entry, since it's still one port at one rate. See
 ## Revoke or suspend access
 
 - **Guest:** `POST /admin/whitelist` with `"enabled":false` — removed from the
-  authorized set on the next recompute (seconds).
+  authorized set on the next recompute (seconds). Note that `/admin/whitelist`
+  adds guests **accepted immediately** (operator path); guests added through
+  the portal are invitations the invited npub has to accept first.
 - **Whole account:** it loses access automatically when its entitlements expire
   or run out of volume. Usage that exhausts a package triggers an inline revoke
   within one usage interval (≤ ~60 s).
 - **Immediately, everywhere:** cutting a node off is loading an empty set; the
   agent also fails **closed** if `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE=1` and the
   backend is unreachable past the grace window.
+- **Live connections** don't survive any of the above: the gate re-checks set
+  membership per packet and resets flows from a de-authorized source; silent
+  ones go within ~30 s via the listener's TCP keepalive hitting the same rule.
 
 ## Rotate secrets
 

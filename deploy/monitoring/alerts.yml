@@ -47,6 +47,15 @@ groups:
         annotations:
           summary: "agent on {{ $labels.instance }} has not read its usage counters for > 5m"
 
+      # The agent refused a full reconcile that would have revoked most of its
+      # live set: either the backend's data is wrong (restore? wrong URL?) or a
+      # deliberate mass revocation needs AUTHZ_ALLOW_MASS_REVOKE=1.
+      - alert: FipsExitMassRevokeRefused
+        expr: increase(fipsexit_agent_mass_revoke_refusals_total[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "agent on {{ $labels.instance }} refused a full reconcile that would revoke most users — check /admin/authz"
+
       # Usage is piling up on disk — backend delivery is failing.
       - alert: FipsExitUsageBuffering
         expr: fipsexit_agent_usage_reports_buffered > 100

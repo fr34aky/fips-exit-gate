@@ -34,6 +34,7 @@ type WhitelistView struct {
 	Label   string
 	Role    string
 	Enabled bool
+	Pending bool // invitation not yet accepted by the guest
 	Addr    netip.Addr
 }
 
@@ -45,6 +46,8 @@ type AccountSummary struct {
 	Open         []PurchaseView // pending/processing purchases awaiting payment
 	Services     []ServiceUsage // per-service consumption (shared balance, per-service rates)
 	UsageBytes   int64
+	Invites      []Invite // invitations addressed to this npub, awaiting its decision
+	AttachedTo   string   // owner npub of the account this npub's address is currently attributed to, if not its own
 }
 
 // ServiceUsage is an account's consumption on one egress service. Metered is the
@@ -63,12 +66,15 @@ type ServiceUsage struct {
 // show one balance draining at each service's rate.
 func (s *Store) UsageByService(ctx context.Context, accountID string) ([]ServiceUsage, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT sv.key, sv.name, sv.rate_ppm,
-		        COALESCE(sum(us.bytes), 0) AS metered,
-		        COALESCE(sum(us.bytes * sv.rate_ppm / 1000000), 0) AS billed
+		`WITH raw AS (
+		    SELECT service_id, sum(bytes) AS bytes FROM usage_samples WHERE account_id = $1 GROUP BY service_id
+		    UNION ALL
+		    SELECT service_id, sum(bytes) FROM usage_daily WHERE account_id = $1 GROUP BY service_id)
+		 SELECT sv.key, sv.name, sv.rate_ppm,
+		        COALESCE(sum(raw.bytes), 0) AS metered,
+		        COALESCE(sum(raw.bytes * sv.rate_ppm / 1000000), 0) AS billed
 		 FROM services sv
-		 LEFT JOIN usage_samples us
-		   ON us.service_id = sv.id AND us.account_id = $1
+		 LEFT JOIN raw ON raw.service_id = sv.id
 		 WHERE sv.enabled
 		 GROUP BY sv.key, sv.name, sv.rate_ppm
 		 ORDER BY sv.key`, accountID)
@@ -93,7 +99,7 @@ func (s *Store) UsageByService(ctx context.Context, accountID string) ([]Service
 func (s *Store) NpubByAddr(ctx context.Context, addr netip.Addr) (string, error) {
 	var npub string
 	err := s.pool.QueryRow(ctx,
-		`SELECT npub FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled
+		`SELECT npub FROM whitelist_entries WHERE fips_addr = $1::inet AND enabled AND NOT pending
 		 ORDER BY (role = 'owner') DESC LIMIT 1`, addr.String()).Scan(&npub)
 	if err != nil {
 		return "", ErrAccountNotFound
@@ -135,7 +141,7 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	}
 
 	wlRows, err := s.pool.Query(ctx,
-		`SELECT npub, COALESCE(label, ''), role, enabled, host(fips_addr)
+		`SELECT npub, COALESCE(label, ''), role, enabled, pending, host(fips_addr)
 		 FROM whitelist_entries WHERE account_id = $1 ORDER BY (role = 'owner') DESC, created_at`, acct.ID)
 	if err != nil {
 		return out, err
@@ -143,7 +149,7 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	for wlRows.Next() {
 		var w WhitelistView
 		var addr string
-		if err := wlRows.Scan(&w.Npub, &w.Label, &w.Role, &w.Enabled, &addr); err != nil {
+		if err := wlRows.Scan(&w.Npub, &w.Label, &w.Role, &w.Enabled, &w.Pending, &addr); err != nil {
 			wlRows.Close()
 			return out, err
 		}
@@ -156,7 +162,8 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 	}
 
 	if err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(sum(bytes), 0) FROM usage_samples WHERE account_id = $1`, acct.ID).
+		`SELECT (SELECT COALESCE(sum(bytes), 0) FROM usage_samples WHERE account_id = $1)
+		      + (SELECT COALESCE(sum(bytes), 0) FROM usage_daily WHERE account_id = $1)`, acct.ID).
 		Scan(&out.UsageBytes); err != nil {
 		return out, err
 	}
@@ -172,5 +179,12 @@ func (s *Store) Summary(ctx context.Context, npub string) (AccountSummary, error
 		return out, err
 	}
 	out.Services = svc
+
+	if out.Invites, err = s.PendingInvites(ctx, npub); err != nil {
+		return out, err
+	}
+	if out.AttachedTo, err = s.AttachedTo(ctx, acct.ID, acct.FipsAddr); err != nil {
+		return out, err
+	}
 	return out, nil
 }

@@ -9,7 +9,7 @@ OpenWrt-portable.
 
 | Service | Endpoint | How to enable |
 |---|---|---|
-| **backend** | `GET /metrics` on the API port (`:8080`) | Always registered. Optionally gate with `METRICS_TOKEN` (Prometheus scrapes with a bearer token); otherwise restrict by network/reverse-proxy. |
+| **backend** | `GET /metrics` on the admin listener (`LISTEN_ADMIN`, default `127.0.0.1:8081`) | Always registered. Bind `LISTEN_ADMIN` to a management interface to scrape it, and gate with `METRICS_TOKEN` (Prometheus scrapes with a bearer token). |
 | **agent** | `GET /metrics` on `FIPS_AGENT_METRICS_ADDR` | Set the env var (e.g. `:9101`). Empty = disabled. |
 | **captive** | `GET /metrics` on `CAPTIVE_METRICS_ADDR` | Set the env var (e.g. `:9102`). Empty = disabled. |
 
@@ -64,6 +64,8 @@ way to a structured pipeline.
 | `fipsexit_agent_usage_reports_sent_total` | counter | Usage reports delivered. |
 | `fipsexit_agent_usage_reports_buffered` | gauge | Reports currently buffered on disk. |
 | `fipsexit_agent_usage_reports_dropped_total` | counter | Reports dropped (buffer full). |
+| `fipsexit_agent_full_syncs_total` | counter | Full (rev=0) reconciles applied. |
+| `fipsexit_agent_mass_revoke_refusals_total` | counter | Full reconciles refused by the mass-revoke guard (the backend's set would have revoked most of the live set). Alert on any increase. |
 | `fipsexit_agent_usage_last_collect_seconds` | gauge | Unix time of the last successful read of the `acct` counters. The stall alert watches this (idle customers are not a stall). |
 | `fipsexit_agent_usage_bytes_total` | counter | Bytes collected from the counters since start, all services. |
 | `fipsexit_agent_usage_collect_errors_total` | counter | Failed counter reads (table missing, `nft` failing). |

@@ -2,10 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -22,6 +19,7 @@ import (
 	"github.com/fr34aky/fips-exit-gate/backend/nostr"
 	"github.com/fr34aky/fips-exit-gate/backend/payments"
 	"github.com/fr34aky/fips-exit-gate/backend/store"
+	"github.com/fr34aky/fips-exit-gate/pkg/captivetoken"
 	"github.com/fr34aky/fips-exit-gate/pkg/fipsaddr"
 )
 
@@ -41,6 +39,11 @@ type portal struct {
 	publicURL       string                  // portal base URL for checkout/pay redirects
 	pacHost         string                  // exit <npub>.fips host for served PACs ("" = derive from publicURL)
 	tmpl            *template.Template
+	inviteLimit     *rateLimiter // per-npub cap on guest invitations
+
+	usedChallenges   *nostr.UsedChallenges // single-use login challenges
+	buyLimit         *rateLimiter          // POST /buy per source address / session
+	maxOpenPurchases int                   // pending invoices an account may hold at once
 }
 
 func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []byte, trustFips, secure bool) (*portal, error) {
@@ -52,6 +55,10 @@ func newPortal(st *store.Store, sessionSecret, challengeSecret, captiveSecret []
 	return &portal{
 		store: st, sessionSecret: sessionSecret, challengeSecret: challengeSecret,
 		captiveSecret: captiveSecret, trustFipsSource: trustFips, secureCookies: secure, tmpl: tmpl,
+		inviteLimit:      newRateLimiter(10, 10*time.Minute),
+		usedChallenges:   nostr.NewUsedChallenges(),
+		buyLimit:         newRateLimiter(5, time.Minute),
+		maxOpenPurchases: 3,
 	}, nil
 }
 
@@ -65,6 +72,9 @@ func (p *portal) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard", p.dashboard)
 	mux.HandleFunc("POST /whitelist/add", p.whitelistAdd)
 	mux.HandleFunc("POST /whitelist/toggle", p.whitelistToggle)
+	mux.HandleFunc("POST /whitelist/accept", p.whitelistAccept)
+	mux.HandleFunc("POST /whitelist/decline", p.whitelistDecline)
+	mux.HandleFunc("POST /whitelist/use-own", p.whitelistUseOwn)
 	mux.HandleFunc("GET /captive", p.captive)
 	mux.HandleFunc("GET /help", p.help)
 	mux.HandleFunc("GET /proxy-clear.pac", p.pacFor("clearnet")) // Connectivity profile
@@ -248,7 +258,7 @@ func (p *portal) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	data := map[string]any{}
+	data := map[string]any{"VerifyURL": p.verifyURL(r)}
 	if npub, ok := p.transparentNpub(r); ok {
 		data["FipsHint"] = npub // known address — one-click continue
 	} else if p.fipsSource(r) {
@@ -302,12 +312,26 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	if err := nostr.VerifyChallenge(p.challengeSecret, nostr.ExtractChallenge(&ev), now); err != nil {
+	challenge := nostr.ExtractChallenge(&ev)
+	if err := nostr.VerifyChallenge(p.challengeSecret, challenge, now); err != nil {
 		p.authFail(w, jsonReq, "invalid or expired challenge")
 		return
 	}
 	if ev.CreatedAt < now-nostr.ChallengeTTLSeconds || ev.CreatedAt > now+60 {
 		p.authFail(w, jsonReq, "stale event")
+		return
+	}
+	// Audience binding: the event MUST carry a "u" tag naming this portal (the
+	// login page and the paste instructions always include it), so a signature
+	// a phishing page obtained for its own challenge cannot be relayed here.
+	// Optional checking would be no checking: the relay would just omit it.
+	if !p.audienceOK(nostr.ExtractTag(&ev, "u"), r) {
+		p.authFail(w, jsonReq, "event must carry a \"u\" tag naming this portal ("+p.verifyURL(r)+")")
+		return
+	}
+	// Single use: a captured event cannot be replayed within the TTL.
+	if !p.usedChallenges.Consume(challenge, now) {
+		p.authFail(w, jsonReq, "challenge already used")
 		return
 	}
 	if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
@@ -320,6 +344,33 @@ func (p *portal) authVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// audienceOK reports whether a "u" tag names this portal: its host must equal
+// the host the browser used (r.Host) or the configured public host, so a
+// Host-rewriting reverse proxy does not lock everyone out.
+func (p *portal) audienceOK(u string, r *http.Request) bool {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	if strings.EqualFold(parsed.Host, r.Host) {
+		return true
+	}
+	if pu, err := url.Parse(p.publicURL); err == nil && pu.Host != "" && strings.EqualFold(parsed.Host, pu.Host) {
+		return true
+	}
+	return false
+}
+
+// verifyURL is the "u" value a signer should use for this request, shown on
+// the login page for the manual/mobile paste flow.
+func (p *portal) verifyURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + "/auth/verify"
 }
 
 func (p *portal) authFail(w http.ResponseWriter, jsonReq bool, msg string) {
@@ -340,7 +391,7 @@ func (p *portal) authFips(w http.ResponseWriter, r *http.Request) {
 		// the entry form with a pointed message rather than a silent bounce.
 		if claim := strings.TrimSpace(r.FormValue("npub")); claim != "" && p.fipsSource(r) {
 			p.render(w, "login.html", map[string]any{
-				"FipsSource": true,
+				"FipsSource": true, "VerifyURL": p.verifyURL(r),
 				"Error": "That npub doesn't match your fips source address. Enter your fips npub — " +
 					"your fips node identity (from `fipsctl show identity-cache`), not a nostr login npub.",
 			})
@@ -379,7 +430,30 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error loading account", http.StatusInternalServerError)
 		return
 	}
-	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err")}
+	data := map[string]any{"S": summary, "Active": anyActive(summary), "Err": r.URL.Query().Get("err"),
+		"Msg": r.URL.Query().Get("msg")}
+	// The nostr-login gap: someone who signed in with a nostr key from a fips
+	// node whose address is not on this account would otherwise pay and never
+	// be authorized (the exit only knows addresses). Point it out while they
+	// are on that very device.
+	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
+		onAccount := false
+		for _, entry := range summary.Whitelist {
+			if entry.Addr == src {
+				onAccount = true
+			}
+		}
+		if !onAccount {
+			data["ThisDevice"] = src.String()
+		}
+	}
+	// The owner row can be parked with nothing active for the address (host
+	// disabled the guest, support intervened): always offer the way back.
+	for _, entry := range summary.Whitelist {
+		if entry.Role == "owner" && !entry.Enabled {
+			data["OwnerParked"] = true
+		}
+	}
 	if clear, priv := p.pacLinks(r.Context()); clear != "" {
 		data["PacClearURL"] = clear
 		data["PacPrivURL"] = priv // may be "" if Privacy isn't enabled
@@ -387,18 +461,83 @@ func (p *portal) dashboard(w http.ResponseWriter, r *http.Request) {
 	p.render(w, "dashboard.html", data)
 }
 
+// whitelistAdd invites a guest npub. The invitation is pending until the guest
+// accepts it from their own dashboard — with one shortcut: if the request
+// arrives over fips FROM the invited address, the requester demonstrably
+// controls that device, so the invitation is accepted on the spot (the common
+// "add this laptop I'm sitting at" case).
 func (p *portal) whitelistAdd(w http.ResponseWriter, r *http.Request) {
 	npub, ok := p.session(r)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	err := p.store.AddWhitelist(r.Context(), npub, strings.TrimSpace(r.FormValue("guest_npub")), strings.TrimSpace(r.FormValue("label")))
+	if !p.inviteLimit.allow(npub) {
+		http.Redirect(w, r, "/dashboard?err="+urlq("Too many invitations in a short time; try again later."), http.StatusSeeOther)
+		return
+	}
+	guest := strings.TrimSpace(r.FormValue("guest_npub"))
+	pending, err := p.store.InviteGuest(r.Context(), npub, guest, strings.TrimSpace(r.FormValue("label")))
 	if err != nil {
 		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
 		return
 	}
+	if !pending {
+		http.Redirect(w, r, "/dashboard?msg="+urlq("That identity is already active on your account (label updated)."), http.StatusSeeOther)
+		return
+	}
+	if src, err := sourceAddr(r); err == nil && p.trustFipsSource && fipsaddr.Valid(src) {
+		if gaddr, err := fipsaddr.FromNpub(guest); err == nil && gaddr == src {
+			if err := p.store.AcceptInvite(r.Context(), guest, npub); err == nil {
+				http.Redirect(w, r, "/dashboard?msg="+urlq("This device is now on your account."), http.StatusSeeOther)
+				return
+			} else {
+				log.Printf("portal: same-device accept for %s: %v", npub, err)
+			}
+		}
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("Invitation sent. It takes effect once that identity accepts it from its own dashboard."), http.StatusSeeOther)
+}
+
+func (p *portal) whitelistAccept(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.AcceptInvite(r.Context(), npub, strings.TrimSpace(r.FormValue("host_npub"))); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("You now share that account's package."), http.StatusSeeOther)
+}
+
+func (p *portal) whitelistDecline(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.DeclineInvite(r.Context(), npub, strings.TrimSpace(r.FormValue("host_npub"))); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// whitelistUseOwn re-attaches the signed-in npub's address to its own account
+// (undoing an accepted invitation).
+func (p *portal) whitelistUseOwn(w http.ResponseWriter, r *http.Request) {
+	npub, ok := p.session(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := p.store.ActivateOwner(r.Context(), npub); err != nil {
+		http.Redirect(w, r, "/dashboard?err="+urlq(friendlyErr(err)), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?msg="+urlq("Your traffic now draws on your own packages."), http.StatusSeeOther)
 }
 
 func (p *portal) whitelistToggle(w http.ResponseWriter, r *http.Request) {
@@ -427,11 +566,8 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
-			log.Printf("portal: packages CreateAccount(%s): %v", npub, err)
-			http.Error(w, "could not create account", http.StatusInternalServerError)
-			return
-		}
+		// Open a session only; a GET must not create rows. The account is
+		// created when something is actually bought (or on the dashboard).
 		p.setSession(w, npub)
 	}
 	pkgs, err := p.store.ListPackages(r.Context())
@@ -444,6 +580,7 @@ func (p *portal) packagesPage(w http.ResponseWriter, r *http.Request) {
 	// (captive webview / script) still authenticates /buy against its fips source.
 	p.render(w, "packages.html", map[string]any{
 		"Packages": pkgs, "Services": services, "Npub": npub, "Pending": r.URL.Query().Get("pending") != "",
+		"Err": r.URL.Query().Get("err"),
 	})
 }
 
@@ -617,13 +754,25 @@ func (p *portal) buy(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if _, err := p.store.CreateAccount(r.Context(), npub); err != nil {
-			log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
-			http.Error(w, "could not create account", http.StatusInternalServerError)
-			return
-		}
+	}
+	// Every buy creates a payment-provider invoice: bound it per identity so a
+	// script can't mint invoices at will. Keyed on the npub, not the source
+	// address, so buyers behind one reverse proxy don't share a bucket.
+	if !p.buyLimit.allow(npub) {
+		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
+		return
 	}
 	ctx := r.Context()
+	// The session may have been opened without an account row (packages GET).
+	if _, err := p.store.CreateAccount(ctx, npub); err != nil {
+		log.Printf("portal: buy CreateAccount(%s): %v", npub, err)
+		http.Error(w, "could not create account", http.StatusInternalServerError)
+		return
+	}
+	if open, err := p.store.OpenPurchases(ctx, npub); err == nil && len(open) >= p.maxOpenPurchases {
+		http.Redirect(w, r, "/packages?err=limit", http.StatusSeeOther)
+		return
+	}
 	packageID := strings.TrimSpace(r.FormValue("package_id"))
 	id, err := p.store.CreatePurchase(ctx, npub, packageID)
 	if err != nil {
@@ -736,25 +885,7 @@ func (p *portal) render(w http.ResponseWriter, name string, data any) {
 // verifyCaptiveToken re-derives the captive daemon's token MAC (see
 // captive/token.go): outer = base64url("<addr>|<exp>|<mac>").
 func (p *portal) verifyCaptiveToken(token string) (netip.Addr, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 {
-		return netip.Addr{}, fmt.Errorf("malformed token")
-	}
-	h := hmac.New(sha256.New, p.captiveSecret)
-	h.Write([]byte(parts[0] + "|" + parts[1]))
-	want := base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:16])
-	if !hmac.Equal([]byte(parts[2]), []byte(want)) {
-		return netip.Addr{}, fmt.Errorf("bad token signature")
-	}
-	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || time.Now().Unix() > exp {
-		return netip.Addr{}, fmt.Errorf("expired token")
-	}
-	return netip.ParseAddr(parts[0])
+	return captivetoken.Verify(p.captiveSecret, token, time.Now().Unix())
 }
 
 func sourceAddr(r *http.Request) (netip.Addr, error) {
@@ -794,6 +925,14 @@ func friendlyErr(err error) string {
 	switch err {
 	case store.ErrAddressInUse:
 		return "That identity is already active on another account."
+	case store.ErrGuestLimit:
+		return "You have reached the maximum number of shared identities for this account."
+	case store.ErrNoActiveEntitlement:
+		return "That account has no active package right now — only accounts with an active package can share one."
+	case store.ErrSelfWhitelist:
+		return "That is this account's own identity."
+	case store.ErrInviteNotFound:
+		return "That invitation no longer exists."
 	default:
 		return "Could not add that identity (check the npub)."
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Login challenges are stateless: a random nonce plus an expiry, authenticated
@@ -59,6 +60,47 @@ func VerifyChallenge(secret []byte, challenge string, nowUnix int64) error {
 func ExtractChallenge(e *Event) string {
 	for _, t := range e.Tags {
 		if len(t) >= 2 && t[0] == "challenge" {
+			return t[1]
+		}
+	}
+	return ""
+}
+
+// UsedChallenges makes challenges single-use: a successfully verified
+// challenge is remembered until it would have expired anyway, and a second
+// presentation is refused. In-memory and per-process (challenges are issued
+// and verified by the same backend).
+type UsedChallenges struct {
+	mu   sync.Mutex
+	seen map[string]int64 // challenge -> expiry unix
+}
+
+// NewUsedChallenges returns an empty cache.
+func NewUsedChallenges() *UsedChallenges { return &UsedChallenges{seen: map[string]int64{}} }
+
+// Consume records challenge as used and reports whether it was fresh. Expired
+// entries are pruned opportunistically.
+func (u *UsedChallenges) Consume(challenge string, nowUnix int64) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if exp, dup := u.seen[challenge]; dup && exp >= nowUnix {
+		return false
+	}
+	if len(u.seen) > 1024 {
+		for c, exp := range u.seen {
+			if exp < nowUnix {
+				delete(u.seen, c)
+			}
+		}
+	}
+	u.seen[challenge] = nowUnix + ChallengeTTLSeconds
+	return true
+}
+
+// ExtractTag returns the first value of the named tag, or "".
+func ExtractTag(e *Event, name string) string {
+	for _, t := range e.Tags {
+		if len(t) >= 2 && t[0] == name {
 			return t[1]
 		}
 	}

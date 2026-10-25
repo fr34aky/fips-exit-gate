@@ -20,13 +20,22 @@ whitelist_entries        -- npubs allowed to consume the account's packages
   fips_addr     inet not null             -- derived
   role          owner|guest               -- owner row auto-created with account
   enabled       bool default true
+  pending       bool default false        -- guest invitation not yet accepted by
+                                          -- the invited npub; a pending row never
+                                          -- authorizes, resolves a source, or
+                                          -- occupies the address
   label         text                      -- user-facing note ("laptop", "alice")
   created_at
   unique (account_id, npub)
-  unique (fips_addr) where enabled        -- an address may be active on at
-                                          -- most ONE account at a time; this
-                                          -- is what makes source-address →
-                                          -- account resolution deterministic
+  unique (fips_addr) where enabled and not pending
+                                          -- an address may be ACTIVE on at most
+                                          -- ONE account at a time; this is what
+                                          -- makes source-address → account
+                                          -- resolution deterministic. Accepting
+                                          -- an invitation parks the other active
+                                          -- row (usually the guest's own owner
+                                          -- row); buying a package on your own
+                                          -- account activates your owner row.
 ```
 
 If npub X is whitelisted by two accounts, only one entry may be enabled; the
@@ -112,7 +121,17 @@ usage_samples            -- per-address, per-service deltas (one row per 30 s wi
   bytes         bigint                    -- metered total (both directions);
                                           -- weighted consumption =
                                           -- bytes * services.rate_ppm / 1e6
-  -- NOT partitioned; grows with traffic (bounded retention is a separate change).
+  -- NOT partitioned. Rows older than RETENTION_DAYS (90) are rolled up into
+  -- usage_daily and deleted with their reports (backend retention job);
+  -- samples with no account or an unknown service are dropped then.
+
+usage_daily              -- per-account, per-service, per-day totals (the roll-up)
+  account_id    fk -> accounts
+  service_id    fk -> services
+  day           date
+  bytes         bigint
+  pk (account_id, day, service_id)
+  -- dashboard and metrics totals = usage_samples + usage_daily
 
 authz_revisions          -- append-only log driving the agent delta sync
   rev           bigserial pk
@@ -120,8 +139,10 @@ authz_revisions          -- append-only log driving the agent delta sync
   fips_addr     inet
   account_id    fk
   created_at
-  -- append-only today (compaction is a separate change); full set = view over
-  -- accounts/whitelist/entitlements, materialized in authz_current
+  -- compacted after REVISION_RETENTION_DAYS (30): rows older than that are
+  -- deleted, always keeping the newest (max(rev) is the global revision); an
+  -- agent whose cursor predates the kept range is handed the full set, which
+  -- it reconciles against its kernel set.
 ```
 
 ## Portal sessions
@@ -139,4 +160,7 @@ logout clears the cookie. Rotating `SESSION_SECRET` invalidates every session.
   statement at usage ingest; crossing the limit emits `del` to
   `authz_revisions` and the inline `revoke` in the usage ack.
 - Whitelist changes and entitlement expiry both write `authz_revisions`;
-  a periodic sweep expires time-based entitlements between traffic events.
+  a periodic sweep (`EXPIRY_SWEEP_S`, default 60 s) recomputes the set between
+  traffic events so time-based entitlements expire on time. Recomputes are
+  serialized by an advisory lock so revision numbers are monotonic in commit
+  order, and each one `NOTIFY`s agent long-polls.

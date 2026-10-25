@@ -61,7 +61,9 @@ throughout — the gate only touches traffic to `EXIT_FIPS_ADDR` on service port
 ## Phase 2: dynamic authorization (exit-agent)
 
 Instead of the static `allowlist.txt`, run the exit-agent (`--profile agent` in
-compose, or the systemd unit in `systemd/`). It owns the `authorized` set from
+compose, or the systemd unit in `systemd/`, which runs as the unprivileged
+`fips-exit-agent` user — install `systemd/fips-exit-agent.sysusers.conf` and run
+`systemd-sysusers` first, see the unit's header). It owns the `authorized` set from
 the backend and reports per-service usage read from the `acct` counters. Run
 one or the other, not both. See `../agent/README.md` for M2 verification against
 the bundled `cmd/fake-backend`.
@@ -78,7 +80,10 @@ counters increment on real traffic.
 `up.sh` still runs `nft -c -f` before loading, so a malformed ruleset fails
 safely.
 
-> Gotcha learned during bring-up: the gate only fires on traffic ingressing via
-> `fips0`. Testing from the exit host itself reaches the exit's own fips address
-> over loopback (`iifname != fips0`), bypassing the gate — always test from a
-> separate fips peer.
+> Gotcha learned during bring-up: the captive redirect only fires on traffic
+> ingressing via `fips0`, and the ruleset now **drops** service-port traffic from
+> any other interface. Testing from the exit host itself reaches its own fips
+> address over loopback, so the connection simply hangs — always test from a
+> separate fips peer. `test/run-nft-gate-test.sh` runs the gate semantics
+> (redirect, accept, loopback drop, live reset on revocation, accounting) against
+> a real kernel in a throwaway container, no fips node needed.

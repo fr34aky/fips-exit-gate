@@ -21,11 +21,14 @@ type acctKey struct {
 type Firewall interface {
 	// ListAuthorized returns the current members of the authorized set.
 	ListAuthorized() (map[netip.Addr]struct{}, error)
-	// ApplyAuthorized adds and removes members atomically.
+	// ApplyAuthorized adds and removes members atomically. Like nft itself it
+	// fails (and applies nothing) if a del member is not present, so callers
+	// filter del against ListAuthorized first; see Agent.presentOnly.
 	ApplyAuthorized(add, del []netip.Addr) error
 	// ReadAcct returns absolute byte counters per (addr, service port).
 	ReadAcct() (map[acctKey]uint64, error)
 	// DeleteAcct removes accounting elements (used to GC revoked addresses).
+	// Fails as a whole if any key is absent; callers filter against ReadAcct.
 	DeleteAcct(keys []acctKey) error
 }
 

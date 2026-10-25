@@ -37,6 +37,8 @@ type config struct {
 	onionSuffix      string
 	dialTimeout      time.Duration
 	handshakeTimeout time.Duration
+	idleTimeout      time.Duration // relay: close after this long with no bytes either way (0 = never)
+	maxLifetime      time.Duration // relay: close after this long regardless of activity (0 = never)
 	maxConns         int
 }
 
@@ -48,6 +50,8 @@ func loadConfig() config {
 		onionSuffix:      getenv("DISPATCH_ONION_SUFFIX", ".onion"),
 		dialTimeout:      time.Duration(getenvInt("DISPATCH_DIAL_TIMEOUT_S", 15)) * time.Second,
 		handshakeTimeout: time.Duration(getenvInt("DISPATCH_HANDSHAKE_TIMEOUT_S", 15)) * time.Second,
+		idleTimeout:      time.Duration(getenvInt("DISPATCH_IDLE_TIMEOUT_S", 7200)) * time.Second,
+		maxLifetime:      time.Duration(getenvInt("DISPATCH_MAX_LIFETIME_S", 0)) * time.Second,
 		maxConns:         getenvInt("DISPATCH_MAX_CONNS", 4096),
 	}
 }
@@ -129,12 +133,28 @@ func handle(client net.Conn, cfg config) {
 
 	// Long-lived tunnel: drop the handshake deadlines and splice both ways.
 	_ = client.SetDeadline(time.Time{})
-	relay(client, up)
+	relay(client, up, cfg.idleTimeout, cfg.maxLifetime)
 }
 
 // relay copies bytes in both directions until either side closes, using TCP
-// half-close so an EOF one way still lets the other drain.
-func relay(a, b net.Conn) {
+// half-close so an EOF one way still lets the other drain. Plain io.Copy on
+// the raw conns keeps Go's splice(2) zero-copy path for TCP<->TCP.
+//
+// Bounds (0 disables either): `maxLife` closes the tunnel after that long
+// regardless of activity (opt-in); `idle` closes it when NEITHER side has
+// received data for that long. Idleness is read from the kernel (TCP_INFO
+// tcpi_last_data_recv, see relay_linux.go) by a watchdog that wakes every
+// idle/4, so no byte is copied through userspace just to be counted and a slow
+// trickle is still seen as activity. On platforms or conn types without that
+// signal the idle bound is not enforced. Revoked clients don't rely on it: the
+// nftables gate resets their flows on the next packet, and the listener's TCP
+// keepalive provokes that even on a silent tunnel.
+func relay(a, b net.Conn, idle, maxLife time.Duration) {
+	closeBoth := func() { a.Close(); b.Close() }
+	if maxLife > 0 {
+		t := time.AfterFunc(maxLife, closeBoth)
+		defer t.Stop()
+	}
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
@@ -145,8 +165,42 @@ func relay(a, b net.Conn) {
 	}
 	go cp(a, b)
 	go cp(b, a)
+
+	if idle > 0 {
+		stop := make(chan struct{})
+		defer close(stop)
+		go idleWatchdog(a, b, idle, stop, closeBoth)
+	}
 	<-done
 	<-done
+}
+
+// idleWatchdog closes the tunnel once both conns report no received data for
+// `idle`. It wakes every idle/4 (at least every second), so the effective
+// bound lies in [idle, 1.25*idle].
+func idleWatchdog(a, b net.Conn, idle time.Duration, stop <-chan struct{}, closeBoth func()) {
+	iv := idle / 4
+	if iv < time.Second {
+		iv = time.Second
+	}
+	t := time.NewTicker(iv)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			ia, okA := sinceLastRecv(a)
+			ib, okB := sinceLastRecv(b)
+			if !okA || !okB {
+				return // no kernel signal for this conn type: don't guess
+			}
+			if ia >= idle && ib >= idle {
+				closeBoth()
+				return
+			}
+		}
+	}
 }
 
 func getenv(k, def string) string {
