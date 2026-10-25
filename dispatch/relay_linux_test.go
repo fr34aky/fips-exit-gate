@@ -75,4 +75,3 @@ func TestRelayTrickleDefersIdleTimeout(t *testing.T) {
 		t.Fatal("relay did not end after the trickle stopped")
 	}
 }
-
