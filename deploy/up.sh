@@ -29,7 +29,7 @@ NFT_FILE="${NFT_FILE:-/etc/nftables.d/fips-exit.nft}"
 # GUARD_PORTS), so e.g. starting the tor profile before adding `tor 1081` yields
 # a refused port, never an open, ungated, unmetered one.
 guard_ports() {
-    echo "${CONNECTIVITY_PORT:-1080} ${TOR_PORT:-1081}"
+    echo "${CONNECTIVITY_PORT:-1080} ${TOR_PORT:-1081} ${WG_PORT:-51820}"
 }
 
 # The live members of the authorized set, as an nft element list ("a, b, c"),
