@@ -45,12 +45,23 @@ func main() {
 	if err := st.SeedPackages(ctx); err != nil {
 		log.Fatalf("backend: seed packages: %v", err)
 	}
+	st.MaxGuests = getenvInt("MAX_GUESTS_PER_ACCOUNT", store.DefaultMaxGuests)
 
 	h := &handlers{
-		store:          st,
-		usageIntervalS: getenvInt("USAGE_INTERVAL_S", 30),
-		graceMinutes:   getenvInt("GRACE_MINUTES", 240),
+		store:           st,
+		usageIntervalS:  getenvInt("USAGE_INTERVAL_S", 30),
+		graceMinutes:    getenvInt("GRACE_MINUTES", 240),
+		revs:            newRevWaiter(),
+		allowMassRevoke: os.Getenv("AUTHZ_ALLOW_MASS_REVOKE") == "1",
 	}
+	if h.allowMassRevoke {
+		log.Printf("backend: AUTHZ_ALLOW_MASS_REVOKE=1 — agents will apply full reconciles that revoke most of their set")
+	}
+	// Wake agent long-polls the moment RecomputeAuthz commits (LISTEN/NOTIFY);
+	// the handler keeps a slow poll as a backstop.
+	go st.ListenAuthz(ctx, h.revs.broadcast)
+	// Time-driven expiry: entitlements that lapse while their account is idle.
+	go runExpirySweep(ctx, st, time.Duration(getenvInt("EXPIRY_SWEEP_S", 60))*time.Second)
 	p, err := newPortal(st,
 		secretEnv("SESSION_SECRET"),
 		secretEnv("CHALLENGE_SECRET"),
@@ -168,6 +179,7 @@ func routes(h *handlers, p *portal, st *store.Store, adminToken string, ph *payH
 	mux.Handle("POST /admin/whitelist", requireAdmin(adminToken, h.adminWhitelist))
 	mux.Handle("POST /admin/credit", requireAdmin(adminToken, h.adminCredit))
 	mux.Handle("GET /admin/authz", requireAdmin(adminToken, h.adminAuthz))
+	mux.Handle("GET /admin/accounts/{npub}", requireAdmin(adminToken, h.adminInspect))
 	mux.Handle("GET /admin/packages", requireAdmin(adminToken, h.adminListPackages))
 	mux.Handle("POST /admin/packages", requireAdmin(adminToken, h.adminCreatePackage))
 	mux.Handle("DELETE /admin/packages/{id}", requireAdmin(adminToken, h.adminDeactivatePackage))

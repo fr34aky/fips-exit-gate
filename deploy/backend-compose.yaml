@@ -65,6 +65,10 @@ services:
       PORTAL_SECURE_COOKIES: ${PORTAL_SECURE_COOKIES:-0}
       PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-http://localhost:8080}
       PORTAL_DEV_AUTOSETTLE: ${PORTAL_DEV_AUTOSETTLE:-0}
+      # Timer-driven expiry of idle accounts' entitlements; mass-revoke override.
+      EXPIRY_SWEEP_S: ${EXPIRY_SWEEP_S:-60}
+      AUTHZ_ALLOW_MASS_REVOKE: ${AUTHZ_ALLOW_MASS_REVOKE:-0}
+      MAX_GUESTS_PER_ACCOUNT: ${MAX_GUESTS_PER_ACCOUNT:-5}
       # Payments. PAYMENT_RAIL selects the rail: btcpay | phoenixd | empty.
       PAYMENT_RAIL: ${PAYMENT_RAIL:-}
       # BTCPay (PAYMENT_RAIL=btcpay). Empty BTCPAY_URL also disables it.

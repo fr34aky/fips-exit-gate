@@ -64,9 +64,11 @@ clearnet **and** `.onion` (a dispatcher routes by destination), and **Privacy**
 
 ## How access works
 
-An account is a nostr identity that has bought a package; it may whitelist
-further npubs to share it. The backend materializes the set of authorized fips
-addresses (owner + enabled guests with an active entitlement) and the agent
+An account is a nostr identity that has bought a package; it may invite
+further npubs to share it, and each invitation takes effect once the invited
+identity accepts it (so nobody can attach, and thereby lock out, an identity
+that isn't theirs). The backend materializes the set of authorized fips
+addresses (owner + accepted guests with an active entitlement) and the agent
 mirrors it into the kernel `authorized` set. Traffic from an authorized address
 reaches the egress service and is metered — one shared balance, decremented by
 `bytes × per-service rate`. Everyone else is handed to the captive daemon.
@@ -94,6 +96,7 @@ Specifications: [derivation](docs/derivation.md) · [agent↔backend API](docs/a
 
 ```sh
 gofmt -l . && go vet ./... && go test ./...
+sh deploy/test/run-nft-gate-test.sh   # nftables gate against a real kernel (needs Docker)
 sh deploy/client/test/run-tunnel-test.sh   # whole-device client tunnel against a real SOCKS server (needs Docker)
 ```
 

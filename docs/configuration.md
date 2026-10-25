@@ -38,6 +38,9 @@ Read by `backend/` (see `backend/main.go`).
 | `PORTAL_DEV_AUTOSETTLE` | `0` | Dev only: `1` grants purchases immediately without any payment rail. **Never in production.** |
 | `USAGE_INTERVAL_S` | `30` | Usage-report interval advertised to agents (seconds). |
 | `GRACE_MINUTES` | `240` | Outage grace window advertised to agents (fail-open duration). |
+| `EXPIRY_SWEEP_S` | `60` | Timer-driven recompute of the authorized set, so entitlements that lapse while an account is idle are revoked promptly. `0` disables. |
+| `AUTHZ_ALLOW_MASS_REVOKE` | `0` | `1` marks full authz responses `force: true`, so agents apply a full reconcile even when it would revoke most of their live set. Use deliberately (e.g. after purging accounts), then unset. |
+| `MAX_GUESTS_PER_ACCOUNT` | `5` | Maximum guest identities an account may invite (pending or accepted). The admin API is not capped. |
 | `PAYMENT_RAIL` | — | Payment rail: `btcpay` (on-chain BTC + Lightning + Monero) or `phoenixd` (Lightning-only, direct). Empty = no rail. See [BTCPay](phase4-btcpay.md) / [phoenixd](phoenixd.md). |
 | `BTCPAY_URL` | — | BTCPay base URL (e.g. `http://<onion>.onion`). Empty = payments disabled. |
 | `BTCPAY_API_KEY` | — | Store-scoped Greenfield API key (`btcpay.store.cancreateinvoice`). |
@@ -111,6 +114,11 @@ Read by `agent/` (see `agent/main.go`).
 | `FIPS_AGENT_STATE_DIR` | `/var/lib/fips-exit-agent` | Durable state (`identity.json` 0600, `runtime.json`). |
 | `FIPS_AGENT_FAIL_CLOSED_AFTER_GRACE` | `0` | `1` = revoke all access if the backend is unreachable past the grace window (default is fail-open: keep the last-known set). |
 | `FIPS_AGENT_USAGE_BUFFER_CAP` | `2880` | Max buffered usage reports during an outage (≈ 24 h at 30 s). |
+| `FIPS_AGENT_FULL_SYNC_S` | `300` | How often to force a full reconcile of the kernel set against the backend (drift backstop). `0` disables the periodic one (startup and heartbeat-triggered reconciles still run); positive values are floored at 30. |
+| `FIPS_AGENT_HEARTBEAT_S` | `60` | Heartbeat interval. |
+| `FIPS_AGENT_LONGPOLL_S` | `50` | How long the backend may hold an authz long-poll (5–55). |
+| `FIPS_AGENT_MASS_REVOKE_MIN` | `50` | Mass-revoke guard floor: a full reconcile is refused if it would delete more than this many addresses *and* more than half of the live set. |
+| `FIPS_AGENT_ALLOW_MASS_REVOKE` | `0` | `1` disables the mass-revoke guard on this node. |
 | `FIPS_AGENT_METRICS_ADDR` | — | If set (e.g. `:9101`), serve Prometheus `/metrics` here. Empty = disabled. |
 
 The agent needs `CAP_NET_ADMIN` (it shells out to `nft`) — the compose service
@@ -133,6 +141,8 @@ policy of its own and never logs destinations. Under compose these come from
 | `DISPATCH_DIAL_TIMEOUT_S` | `15` | Upstream dial timeout. |
 | `DISPATCH_HANDSHAKE_TIMEOUT_S` | `15` | SOCKS handshake deadline (cleared once the tunnel relays). |
 | `DISPATCH_MAX_CONNS` | `4096` | Max concurrent connections (load-shed beyond). |
+| `DISPATCH_IDLE_TIMEOUT_S` | `7200` | Close a relayed tunnel after this long with no bytes either way (0 = never). Revoked tunnels don't need it: the gate resets them on their next packet, and the listener's TCP keepalive (15 s) triggers that within ~30 s even when silent. |
+| `DISPATCH_MAX_LIFETIME_S` | `0` | Close a relayed tunnel after this long in total, active or not (0 = never). Opt-in; it would cut legitimate long sessions. |
 
 Onion routing needs the `tor` profile running (it provides `TOR_DISPATCH_PORT`);
 without it, clearnet still works and `.onion` returns a SOCKS host-unreachable.
